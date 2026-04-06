@@ -2,10 +2,18 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
+
+	"github.com/perezd/stargate/internal/config"
+	"github.com/perezd/stargate/internal/server"
 )
 
 // Version is the current build version. Override at build time via:
@@ -72,8 +80,81 @@ var handlers = map[string]subcommandHandler{
 }
 
 func handleServe(args []string, configPath string, verbose bool) int {
-	fmt.Fprintln(os.Stderr, "serve: not implemented")
-	return 1
+	// Parse -l/--listen flag from args.
+	var listenOverride string
+	remaining := args[:0]
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "-l" || arg == "--listen":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "error: --listen requires a value")
+				return 1
+			}
+			listenOverride = args[i]
+		case strings.HasPrefix(arg, "--listen="):
+			listenOverride = strings.TrimPrefix(arg, "--listen=")
+		case strings.HasPrefix(arg, "-l="):
+			listenOverride = strings.TrimPrefix(arg, "-l=")
+		default:
+			remaining = append(remaining, arg)
+		}
+	}
+	_ = remaining
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "serve: failed to load config: %v\n", err)
+		return 1
+	}
+
+	listenAddr := cfg.Server.Listen
+	if listenOverride != "" {
+		listenAddr = listenOverride
+	}
+	if listenAddr == "" {
+		listenAddr = "127.0.0.1:9099"
+	}
+
+	srv := server.New(cfg)
+	httpSrv := &http.Server{
+		Addr:    listenAddr,
+		Handler: srv,
+	}
+
+	// Handle SIGINT/SIGTERM for graceful shutdown.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	errCh := make(chan error, 1)
+	go func() {
+		fmt.Fprintf(os.Stderr, "stargate listening on %s\n", listenAddr)
+		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			errCh <- err
+		}
+		close(errCh)
+	}()
+
+	select {
+	case sig := <-sigCh:
+		if verbose {
+			fmt.Fprintf(os.Stderr, "debug: received signal %s, shutting down\n", sig)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := httpSrv.Shutdown(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "serve: shutdown error: %v\n", err)
+			return 1
+		}
+	case err := <-errCh:
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "serve: %v\n", err)
+			return 1
+		}
+	}
+
+	return 0
 }
 
 func handleHook(args []string, configPath string, verbose bool) int {
