@@ -81,10 +81,9 @@ func TestHandlers_UnknownSubcommandNotRegistered(t *testing.T) {
 	}
 }
 
-// TestHandlers_SubcommandHandlersReturnNonZero verifies each handler returns a
-// non-zero exit code when the feature is not yet implemented.
-func TestHandlers_SubcommandHandlersReturnNonZero(t *testing.T) {
-	// Redirect stderr to suppress "not implemented" messages during tests.
+// TestHandlers_UnimplementedReturnNonZero verifies not-yet-implemented handlers
+// return non-zero exit codes.
+func TestHandlers_UnimplementedReturnNonZero(t *testing.T) {
 	devNull, _ := os.Open(os.DevNull)
 	origStderr := os.Stderr
 	os.Stderr = devNull
@@ -93,11 +92,60 @@ func TestHandlers_SubcommandHandlersReturnNonZero(t *testing.T) {
 		devNull.Close()
 	}()
 
-	for name, handler := range handlers {
+	unimplemented := []string{"hook", "test", "corpus"}
+	for _, name := range unimplemented {
+		handler := handlers[name]
 		code := handler(nil, "", false)
 		if code == 0 {
 			t.Errorf("handler %q returned exit code 0, expected non-zero (not implemented)", name)
 		}
+	}
+}
+
+func TestConfigValidate_ValidConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stargate.toml")
+	os.WriteFile(path, []byte(`
+[server]
+listen = "127.0.0.1:9099"
+[classifier]
+default_decision = "yellow"
+`), 0644)
+
+	code := handleConfigValidate(path, false)
+	if code != 0 {
+		t.Errorf("expected exit 0 for valid config, got %d", code)
+	}
+}
+
+func TestConfigValidate_InvalidConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stargate.toml")
+	os.WriteFile(path, []byte(`
+[classifier]
+default_decision = "invalid"
+`), 0644)
+
+	devNull, _ := os.Open(os.DevNull)
+	origStderr := os.Stderr
+	os.Stderr = devNull
+	defer func() { os.Stderr = origStderr; devNull.Close() }()
+
+	code := handleConfigValidate(path, false)
+	if code != 1 {
+		t.Errorf("expected exit 1 for invalid config, got %d", code)
+	}
+}
+
+func TestConfigValidate_MissingFile(t *testing.T) {
+	devNull, _ := os.Open(os.DevNull)
+	origStderr := os.Stderr
+	os.Stderr = devNull
+	defer func() { os.Stderr = origStderr; devNull.Close() }()
+
+	code := handleConfigValidate("/nonexistent/stargate.toml", false)
+	if code != 1 {
+		t.Errorf("expected exit 1 for missing file, got %d", code)
 	}
 }
 
