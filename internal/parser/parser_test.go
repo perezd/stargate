@@ -742,6 +742,26 @@ func TestWalkEndOfOptions(t *testing.T) {
 
 // ---- Function definitions ----
 
+func TestWalkForLoopIterationList(t *testing.T) {
+	// "for x in $(gen); do echo $x; done" — gen inside $() should be extracted.
+	infos, err := ParseAndWalk("for x in $(gen); do echo $x; done", "bash", nil)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	names := make(map[string]bool)
+	for _, info := range infos {
+		if info.Name != "" {
+			names[info.Name] = true
+		}
+	}
+	if !names["gen"] {
+		t.Error("expected 'gen' from for loop iteration list $(), got", names)
+	}
+	if !names["echo"] {
+		t.Error("expected 'echo' from for loop body, got", names)
+	}
+}
+
 func TestWalkFunctionBody(t *testing.T) {
 	// f() { rm -rf /; } → finds "rm" inside function body with InFunction="f".
 	infos, err := ParseAndWalk("f() { rm -rf /; }", "bash", nil)
@@ -930,7 +950,8 @@ func TestWalkCommandDashV(t *testing.T) {
 }
 
 func TestWalkUnresolvableNoSubcommand(t *testing.T) {
-	// "$CMD status" — unresolvable, Subcommand should be empty.
+	// "$CMD status" — unresolvable, Subcommand should be empty, but all
+	// tokens (including the unresolvable command word) should be in Args.
 	infos, err := ParseAndWalk("$CMD status", "bash", nil)
 	if err != nil {
 		t.Fatalf("error: %v", err)
@@ -943,5 +964,9 @@ func TestWalkUnresolvableNoSubcommand(t *testing.T) {
 	}
 	if infos[0].Subcommand != "" {
 		t.Errorf("expected empty Subcommand for unresolvable command, got %q", infos[0].Subcommand)
+	}
+	// The unresolvable command word and "status" should both be in Args.
+	if len(infos[0].Args) < 2 {
+		t.Errorf("expected at least 2 args (command word + status), got %v", infos[0].Args)
 	}
 }

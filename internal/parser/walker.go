@@ -291,6 +291,12 @@ func walkCmd(ws *walkerState, cmd syntax.Command) {
 		walkStmts(ws, c.Do)
 
 	case *syntax.ForClause:
+		// Walk the iteration list for command substitutions (e.g., for x in $(gen); do ...).
+		if wi, ok := c.Loop.(*syntax.WordIter); ok {
+			for _, item := range wi.Items {
+				walkWordSubsts(ws, item)
+			}
+		}
 		walkStmts(ws, c.Do)
 
 	case *syntax.CaseClause:
@@ -508,18 +514,19 @@ func resolveCommand(args []*syntax.Word, depth int, wrappers map[string]WrapperD
 	rest := args[1:]
 
 	// Check for unresolvable dynamic command names.
+	// Return full args so the command token is preserved in positional args.
 	if isUnresolvable(cmdWord) {
-		return "", rest
+		return "", args
 	}
 
 	// Check for brace expansion evasion.
 	if isBraceExpansion(cmdWord) {
-		return "", rest
+		return "", args
 	}
 
 	lit, ok := wordLiteral(cmdWord)
 	if !ok {
-		return "", rest
+		return "", args
 	}
 
 	wrapper, isWrapper := wrappers[lit]

@@ -182,6 +182,31 @@ func TestValidation(t *testing.T) {
 			wantErr: "store_decisions",
 		},
 		{
+			name:    "wrapper empty command",
+			toml:    "[[wrappers]]\ncommand = \"\"",
+			wantErr: "wrappers[0]: command must not be empty",
+		},
+		{
+			name:    "wrapper duplicate command",
+			toml:    "[[wrappers]]\ncommand = \"sudo\"\n[[wrappers]]\ncommand = \"sudo\"",
+			wantErr: "duplicate command",
+		},
+		{
+			name:    "wrapper negative flag arg count",
+			toml:    "[[wrappers]]\ncommand = \"sudo\"\n[wrappers.flags]\n\"-u\" = -1",
+			wantErr: "arg count must be non-negative",
+		},
+		{
+			name:    "commands empty command",
+			toml:    "[[commands]]\ncommand = \"\"",
+			wantErr: "commands[0]: command must not be empty",
+		},
+		{
+			name:    "commands duplicate command",
+			toml:    "[[commands]]\ncommand = \"git\"\n[[commands]]\ncommand = \"git\"",
+			wantErr: "duplicate command",
+		},
+		{
 			name:    "telemetry enabled without endpoint",
 			toml:    "[telemetry]\nenabled = true\nendpoint = \"\"",
 			wantErr: "telemetry.endpoint",
