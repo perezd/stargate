@@ -1634,18 +1634,60 @@ Key behaviors (summary):
 
 ### 7.3 Rule Matching Logic
 
-For each `CommandInfo`, rules are matched as follows:
+A rule matches if **all** specified fields match. Fields not specified are wildcards (match anything). Rules within each tier are evaluated in definition order; first match wins.
 
-1. **`command` / `commands`**: Match against `CommandInfo.Name`. Case-sensitive exact match.
-2. **`subcommands`**: If present, require `CommandInfo.Subcommand` to match one of the listed subcommands. For commands with known global flags that precede subcommands (e.g., `git -C <path>`, `docker --context <name>`, `gh --repo <owner/repo>`), the walker skips global flags and their arguments when extracting the subcommand. The list of global flags per command is maintained in the walker configuration. Commands with unrecognized flag patterns before the first positional argument fall through to YELLOW. The walker honors `--` (end-of-options) as a terminator. Arguments after `--` are never treated as subcommands. For example, `git -- status` treats `status` as a file argument, not a subcommand.
-3. **`flags`**: If present, require at least one of the listed flags in `CommandInfo.Flags`. Flags are normalized: `-rf` matches both `-rf` and `-r -f`.
-4. **`args`**: If present, require at least one argument to match any listed glob pattern.
-5. **`scope`**: If present, require at least one argument to be a path starting with the scope prefix.
-6. **`context`**: If present, require `CommandContext` to match (e.g., `"pipeline_sink"` requires `PipelinePosition >= 2`).
-7. **`resolve`**: If present, invoke the named resolver to extract a target value, then check if it's in the named scope. Resolver returning "unresolvable" means the rule does not match.
-8. **`pattern`**: Regex fallback applied to the raw command string. Used for constructs that resist AST decomposition.
+#### 7.3.1 Field Matching Rules
 
-A rule matches if **all** specified fields match. Fields not specified are wildcards.
+1. **`command` / `commands`**: Match against `CommandInfo.Name`. Case-sensitive exact match. A rule must specify either `command` (single string) or `commands` (array) — never both. Config validation rejects rules with both set. If neither is set, the rule matches any command name (useful for `pattern`-only or `context`-only rules). `CommandInfo.Name == ""` (unresolvable) never matches any command/commands rule.
+
+2. **`subcommands`**: If present, require `CommandInfo.Subcommand` to match one of the listed subcommands. Case-sensitive exact match. If `CommandInfo.Subcommand == ""` (no subcommand or lookup mode), the rule does not match. An empty `subcommands` list is a wildcard.
+
+3. **`flags`**: If present, require at least one of the listed flags to match any flag in `CommandInfo.Flags`. Flag matching uses short-flag decomposition:
+   - Combined short flags are decomposed into constituent characters: `-rf` → `{r, f}`. A rule flag `-rf` matches CommandInfo flags `["-r", "-f"]` and vice versa — any combined short flag containing all the constituent characters matches.
+   - Long flags (`--recursive`, `--force`) are matched literally. No cross-form matching: rule flag `-rf` does NOT match `["--recursive", "--force"]`. Rule authors must list all forms they want to match.
+   - `--flag=value` forms: the `=value` suffix is stripped before matching, so rule flag `--output` matches CommandInfo flag `--output=file`.
+
+4. **`args`**: If present, require at least one argument in `CommandInfo.Args` to match any listed glob pattern. Glob matching uses `doublestar.Match` (not `filepath.Match`) to support `**` for recursive path patterns. Examples: `/etc/*` matches `/etc/passwd` but not `/etc/ssh/config`; `**/node_modules` matches `./src/node_modules`.
+
+5. **`scope`**: If present, require at least one argument in `CommandInfo.Args` to be a path under the scope directory. Scope matching uses path-prefix semantics with boundary enforcement:
+   - At config load time, scopes that don't end with `/` (except `/` itself) have `/` appended. E.g., `scope = "/etc"` becomes `"/etc/"`.
+   - Matching is `strings.HasPrefix(arg, normalizedScope)`. This ensures `/etc` matches `/etc/passwd` but not `/etcetera/file`.
+   - `scope = "/"` matches all paths (system-wide).
+
+6. **`context`**: If present, require `CommandContext` to match. Valid context values:
+   - `"any"` or `""` — wildcard (default, matches everything)
+   - `"pipeline_sink"` — requires `PipelinePosition >= 2`
+   - `"subshell"` — requires `SubshellDepth > 0`
+   - `"substitution"` — requires `InSubstitution == true`
+   - `"condition"` — requires `InCondition == true`
+   - `"function"` — requires `InFunction != ""`
+   Config validation rejects unknown context values.
+
+7. **`resolve`**: If present, invoke the named resolver to extract a target value from the command, then check if the value matches a pattern in the named scope. Resolver returning "unresolvable" means the rule does not match (falls through). See §4 Scopes and Resolvers.
+
+8. **`pattern`**: Regex applied to the full raw command string (not per-CommandInfo). Used for constructs that resist AST decomposition (e.g., `curl ... | bash` spans two AST nodes). If a rule has both AST fields (command, flags, etc.) and a pattern, ALL must match.
+
+#### 7.3.2 Pipeline Evaluation Order
+
+The engine evaluates the full `[]CommandInfo` from the walker against each tier:
+
+**RED check (any-match):** For each CommandInfo, evaluate all RED rules. If ANY CommandInfo matches ANY RED rule → return RED immediately (short-circuit). The matching CommandInfo and rule are recorded in the result.
+
+**GREEN check (all-match):** For each CommandInfo, evaluate all GREEN rules. ALL commands must match at least one GREEN rule for the result to be GREEN. If any single command has no GREEN match → not GREEN, continue to YELLOW. Unresolvable commands (`Name == ""`) never match GREEN rules, so they always fail the GREEN check.
+
+**YELLOW check (first-match):** For each CommandInfo that didn't match GREEN, evaluate YELLOW rules. First match wins. The result includes whether `llm_review` is set on the matching rule. If no YELLOW rule matches, the default decision from config is applied.
+
+**Default:** If no rule matches at any tier, `classifier.default_decision` is applied (default: `"yellow"`).
+
+#### 7.3.3 Result Structure
+
+The evaluation result carries:
+- `Decision` — `"red"`, `"yellow"`, or `"green"`
+- `Action` — `"block"`, `"review"`, or `"allow"` (mapped from decision; LLM review can change yellow→allow or yellow→block later)
+- `Reason` — human-readable explanation (from rule or default)
+- `Rule` — the matched rule's level, reason, and index (nil for default)
+- `LLMReview` — whether to escalate to LLM (from YELLOW rule's `llm_review` field)
+- `MatchedCommand` — which CommandInfo triggered the match (for RED, the specific dangerous command)
 
 ### 7.4 LLM Review Protocol
 
