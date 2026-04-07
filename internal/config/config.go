@@ -84,8 +84,8 @@ type WrapperConfig struct {
 	Command string         `toml:"command"`
 	Flags   map[string]int `toml:"flags"`
 	// NoStrip lists flags that indicate the wrapper is NOT executing a command
-	// (e.g., "command -v" is a lookup, not execution). When any of these flags
-	// are present, the wrapper is not stripped.
+	// (e.g., "command -v" is a lookup, not execution). When the first
+	// post-wrapper token is one of these flags, the wrapper is not stripped.
 	NoStrip []string `toml:"no_strip"`
 	// ConsumeEnvAssigns causes the walker to also skip VAR=val tokens that
 	// appear before the real command (e.g., env FOO=bar cmd).
@@ -260,10 +260,10 @@ func applyDefaults(cfg *Config) {
 	if cfg.Corpus.Path == "" {
 		cfg.Corpus.Path = "~/.local/share/stargate/precedents.db"
 	}
-	if len(cfg.Wrappers) == 0 {
+	if cfg.Wrappers == nil {
 		cfg.Wrappers = DefaultWrappers()
 	}
-	if len(cfg.Commands) == 0 {
+	if cfg.Commands == nil {
 		cfg.Commands = DefaultCommandFlags()
 	}
 	if cfg.Corpus.ExactHitMode == "" {

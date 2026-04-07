@@ -577,33 +577,6 @@ func skipWrapperArgs(args []*syntax.Word, def WrapperDef) []*syntax.Word {
 	return args
 }
 
-// skipFlagsWithArgs is a generic flag skipper that handles flags consuming
-// arguments, --flag=value forms, and -- termination. Retained as a helper.
-func skipFlagsWithArgs(args []*syntax.Word, takesArg map[string]bool) []*syntax.Word {
-	for len(args) > 0 {
-		lit, ok := wordLiteral(args[0])
-		if !ok {
-			break
-		}
-		if lit == "--" {
-			args = args[1:]
-			break
-		}
-		if !strings.HasPrefix(lit, "-") {
-			break
-		}
-		flagName := lit
-		if idx := strings.Index(lit, "="); idx >= 0 {
-			flagName = lit[:idx]
-		}
-		args = args[1:]
-		if takesArg[flagName] && !strings.Contains(lit, "=") && len(args) > 0 {
-			args = args[1:]
-		}
-	}
-	return args
-}
-
 // classifyArgs splits args into flags, positional args, and the subcommand.
 // cmdName is used to look up known global flags that should be skipped
 // (along with their arguments) when finding the subcommand.
