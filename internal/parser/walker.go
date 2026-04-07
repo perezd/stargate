@@ -142,6 +142,12 @@ type walkerState struct {
 	// Pipeline position stack (1-indexed, 0 = not in pipeline).
 	pipelineStack []int
 
+	// lastPipeStageIdx is the results index recorded just before the last
+	// pipeline stage is walked. Used in walkStmt to attach redirects to the
+	// correct commands when the last stage is a compound command that may
+	// contain nested pipelines (e.g., cmd1 | { cmd2 | cmd3; } > out).
+	lastPipeStageIdx int
+
 	// Subshell nesting depth.
 	subshellDepth int
 
@@ -246,11 +252,14 @@ func walkStmt(ws *walkerState, stmt *syntax.Stmt) {
 					}
 				} else {
 					// Compound last stage — propagate to all direct commands in it.
-					// Commands in the last pipeline stage share PipelinePosition == len(stages).
-					maxPos := len(stages)
-					for i := directIdx; i < len(ws.results); i++ {
+					// Use lastPipeStageIdx (set in walkBinaryCmd just before the last
+					// stage was walked) to find only the commands from that stage.
+					// This correctly handles nested pipelines inside the compound, e.g.
+					// cmd1 | { cmd2 | cmd3; } > out — only cmd2 and cmd3 get the redirect.
+					startIdx := ws.lastPipeStageIdx
+					for i := startIdx; i < len(ws.results); i++ {
 						r := &ws.results[i]
-						if r.RawNode != nil && !r.Context.InSubstitution && r.Context.PipelinePosition == maxPos {
+						if r.RawNode != nil && !r.Context.InSubstitution {
 							r.Redirects = append(r.Redirects, redirs...)
 						}
 					}
@@ -310,9 +319,22 @@ func walkCmd(ws *walkerState, cmd syntax.Command) {
 
 	case *syntax.ForClause:
 		// Walk the iteration list for command substitutions (e.g., for x in $(gen); do ...).
-		if wi, ok := c.Loop.(*syntax.WordIter); ok {
-			for _, item := range wi.Items {
+		switch loop := c.Loop.(type) {
+		case *syntax.WordIter:
+			for _, item := range loop.Items {
 				walkWordSubsts(ws, item)
+			}
+		case *syntax.CStyleLoop:
+			// C-style for loop: for ((init; cond; post)); do ... done
+			// Walk each arithmetic expression for nested command substitutions.
+			if loop.Init != nil {
+				walkArithmExpr(ws, loop.Init)
+			}
+			if loop.Cond != nil {
+				walkArithmExpr(ws, loop.Cond)
+			}
+			if loop.Post != nil {
+				walkArithmExpr(ws, loop.Post)
 			}
 		}
 		walkStmts(ws, c.Do)
@@ -320,6 +342,10 @@ func walkCmd(ws *walkerState, cmd syntax.Command) {
 	case *syntax.CaseClause:
 		walkWordSubsts(ws, c.Word)
 		for _, item := range c.Items {
+			// Walk patterns for command substitutions (e.g., case $x in $(pat)) ...).
+			for _, pat := range item.Patterns {
+				walkWordSubsts(ws, pat)
+			}
 			walkStmts(ws, item.Stmts)
 		}
 
@@ -365,6 +391,12 @@ func walkBinaryCmd(ws *walkerState, bc *syntax.BinaryCmd) {
 		stages := collectPipelineStages(bc)
 		for i, stmt := range stages {
 			pos := i + 1 // 1-indexed: 1 = first stage, 2+ = subsequent
+			if i == len(stages)-1 {
+				// Record the index where the last stage's commands will start.
+				// walkStmt uses this to attach redirects to the correct commands
+				// when the last stage is compound (e.g., cmd1 | { cmd2 | cmd3; } > out).
+				ws.lastPipeStageIdx = len(ws.results)
+			}
 			ws.pipelineStack = append(ws.pipelineStack, pos)
 			ws.parentOpStack = append(ws.parentOpStack, pipeOp)
 			walkStmt(ws, stmt)
@@ -471,6 +503,19 @@ func walkWordParts(ws *walkerState, parts []syntax.WordPart) {
 			if p.Repl != nil {
 				walkWordSubsts(ws, p.Repl.Orig)
 				walkWordSubsts(ws, p.Repl.With)
+			}
+			// Walk slice expressions: ${x:$(offset):$(length)}
+			if p.Slice != nil {
+				if p.Slice.Offset != nil {
+					walkArithmExpr(ws, p.Slice.Offset)
+				}
+				if p.Slice.Length != nil {
+					walkArithmExpr(ws, p.Slice.Length)
+				}
+			}
+			// Walk array index expressions: ${x[$(idx)]}
+			if p.Index != nil {
+				walkArithmExpr(ws, p.Index)
 			}
 		case *syntax.ArithmExp:
 			// Walk nested expressions in arithmetic expansions: $(($(cmd) + 1))
@@ -624,6 +669,14 @@ func resolveCommand(args []*syntax.Word, depth int, wrappers map[string]WrapperD
 		return lit, nil, false
 	}
 
+	// If the remaining args still start with a flag token, skipWrapperArgs
+	// stopped on an unknown flag. We cannot safely strip the wrapper because
+	// we don't know how many arguments the unknown flag consumes. Return the
+	// wrapper name (fail-closed — the command falls to default classification).
+	if firstLit, ok := wordLiteral(rest[0]); ok && strings.HasPrefix(firstLit, "-") {
+		return lit, nil, false
+	}
+
 	return resolveCommand(rest, depth+1, wrappers)
 }
 
@@ -665,15 +718,22 @@ func skipWrapperArgs(args []*syntax.Word, def WrapperDef) []*syntax.Word {
 		}
 
 		// Flag token (only before --).
+		// Only skip flags that are explicitly known in def.Flags. Unknown flags
+		// stop processing (fail-closed — the wrapper cannot be safely stripped
+		// when we don't know how many arguments an unknown flag consumes).
 		if !endOfOptions && strings.HasPrefix(lit, "-") {
 			flagName, _, hasEq := strings.Cut(lit, "=")
+			if def.Flags == nil {
+				break
+			}
+			argc, known := def.Flags[flagName]
+			if !known {
+				break
+			}
 			args = args[1:]
-			// Consume extra positional arguments this flag takes (only when not --flag=val form).
-			if def.Flags != nil {
-				if argc, known := def.Flags[flagName]; known && argc > 0 && !hasEq {
-					for j := 0; j < argc && len(args) > 0; j++ {
-						args = args[1:]
-					}
+			if argc > 0 && !hasEq {
+				for j := 0; j < argc && len(args) > 0; j++ {
+					args = args[1:]
 				}
 			}
 			continue

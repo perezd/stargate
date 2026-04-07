@@ -1116,3 +1116,87 @@ func TestWalkUnresolvableNoSubcommand(t *testing.T) {
 		t.Errorf("expected at least 2 args (command word + status), got %v", infos[0].Args)
 	}
 }
+
+// ---- Fix: nested pipeline in compound last stage redirect attachment ----
+
+func TestWalkNestedPipelineCompoundLastStageRedirect(t *testing.T) {
+	// "cmd1 | { cmd2 | cmd3; } > out" — cmd3 is in an inner pipeline inside the
+	// compound last stage. The redirect must attach to cmd2 and cmd3, not cmd1.
+	infos, err := ParseAndWalk("cmd1 | { cmd2 | cmd3; } > out", "bash", nil)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	idx := make(map[string]int)
+	for i, info := range infos {
+		idx[info.Name] = i
+	}
+	for _, name := range []string{"cmd1", "cmd2", "cmd3"} {
+		if _, ok := idx[name]; !ok {
+			t.Fatalf("expected to find %q in results: %+v", name, infos)
+		}
+	}
+	if len(infos[idx["cmd1"]].Redirects) != 0 {
+		t.Errorf("cmd1: expected 0 redirects, got %d", len(infos[idx["cmd1"]].Redirects))
+	}
+	if len(infos[idx["cmd2"]].Redirects) != 1 {
+		t.Errorf("cmd2: expected 1 redirect (compound last stage), got %d", len(infos[idx["cmd2"]].Redirects))
+	}
+	if len(infos[idx["cmd3"]].Redirects) != 1 {
+		t.Errorf("cmd3: expected 1 redirect (inner pipeline in compound last stage), got %d", len(infos[idx["cmd3"]].Redirects))
+	}
+}
+
+// ---- Fix: unknown wrapper flags fail-closed ----
+
+func TestWalkUnknownWrapperFlagFailClosed(t *testing.T) {
+	// "sudo --unknown-flag value rm" — --unknown-flag is not in sudo's Flags map,
+	// so we cannot safely strip the wrapper. Name should remain "sudo".
+	infos, err := ParseAndWalk("sudo --unknown-flag value rm", "bash", nil)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if len(infos) == 0 {
+		t.Fatal("expected at least 1 command")
+	}
+	if infos[0].Name != "sudo" {
+		t.Errorf("expected name=sudo (unknown flag stops stripping), got %q", infos[0].Name)
+	}
+}
+
+// ---- Fix: C-style for loop arithmetic expressions walked ----
+
+func TestWalkCStyleForLoopSubstitution(t *testing.T) {
+	// "for ((i=$(start); i<10; i++)); do echo; done" — $(start) must be found.
+	infos, err := ParseAndWalk("for ((i=$(start); i<10; i++)); do echo; done", "bash", nil)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	names := make(map[string]bool)
+	for _, info := range infos {
+		if info.Name != "" {
+			names[info.Name] = true
+		}
+	}
+	if !names["start"] {
+		t.Errorf("expected 'start' from C-style for loop init expression, got names: %v", names)
+	}
+}
+
+// ---- Fix: case patterns walked for substitutions ----
+
+func TestWalkCasePatternSubstitution(t *testing.T) {
+	// "case $x in $(pat)) echo;; esac" — $(pat) in the pattern must be found.
+	infos, err := ParseAndWalk("case $x in $(pat)) echo;; esac", "bash", nil)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	names := make(map[string]bool)
+	for _, info := range infos {
+		if info.Name != "" {
+			names[info.Name] = true
+		}
+	}
+	if !names["pat"] {
+		t.Errorf("expected 'pat' from case pattern substitution, got names: %v", names)
+	}
+}
