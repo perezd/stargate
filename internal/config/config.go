@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"regexp"
 	"time"
@@ -223,15 +224,70 @@ func applyDefaults(cfg *Config) {
 }
 
 // Validate checks that required fields have acceptable values.
+// This is the authority — if Validate passes, the config is safe to use.
 func (cfg *Config) Validate() error {
-	// Server: listen is required.
+	// --- Server ---
 	if cfg.Server.Listen == "" {
 		return fmt.Errorf("config: server.listen is required")
 	}
-
-	// Duration fields.
+	if _, _, err := net.SplitHostPort(cfg.Server.Listen); err != nil {
+		return fmt.Errorf("config: server.listen is not a valid host:port: %w", err)
+	}
 	if err := parseDuration("server.timeout", cfg.Server.Timeout); err != nil {
 		return err
+	}
+
+	// --- Parser ---
+	validDialects := map[string]bool{"bash": true, "posix": true, "mksh": true}
+	if !validDialects[cfg.Parser.Dialect] {
+		return fmt.Errorf("config: parser.dialect must be bash, posix, or mksh; got %q", cfg.Parser.Dialect)
+	}
+
+	// --- Classifier ---
+	validDecisions := map[string]bool{"red": true, "yellow": true, "green": true}
+	if !validDecisions[cfg.Classifier.DefaultDecision] {
+		return fmt.Errorf("config: classifier.default_decision must be red, yellow, or green; got %q", cfg.Classifier.DefaultDecision)
+	}
+	if cfg.Classifier.UnresolvableExpansion != "" && !validDecisions[cfg.Classifier.UnresolvableExpansion] {
+		return fmt.Errorf("config: classifier.unresolvable_expansion must be red, yellow, or green; got %q", cfg.Classifier.UnresolvableExpansion)
+	}
+	if cfg.Classifier.MaxASTDepth < 0 {
+		return fmt.Errorf("config: classifier.max_ast_depth must be non-negative; got %d", cfg.Classifier.MaxASTDepth)
+	}
+	if cfg.Classifier.MaxCommandLength < 0 {
+		return fmt.Errorf("config: classifier.max_command_length must be non-negative; got %d", cfg.Classifier.MaxCommandLength)
+	}
+
+	// --- LLM ---
+	if cfg.LLM.MaxTokens < 0 {
+		return fmt.Errorf("config: llm.max_tokens must be non-negative; got %d", cfg.LLM.MaxTokens)
+	}
+	if cfg.LLM.MaxFileSize < 0 {
+		return fmt.Errorf("config: llm.max_file_size must be non-negative; got %d", cfg.LLM.MaxFileSize)
+	}
+	if cfg.LLM.Temperature < 0 || cfg.LLM.Temperature > 2 {
+		return fmt.Errorf("config: llm.temperature must be between 0.0 and 2.0; got %f", cfg.LLM.Temperature)
+	}
+	if cfg.LLM.MaxResponseReasoningLength < 0 {
+		return fmt.Errorf("config: llm.max_response_reasoning_length must be non-negative; got %d", cfg.LLM.MaxResponseReasoningLength)
+	}
+
+	// --- Corpus ---
+	validExactHitModes := map[string]bool{"": true, "precedent": true, "auto_decide": true}
+	if !validExactHitModes[cfg.Corpus.ExactHitMode] {
+		return fmt.Errorf("config: corpus.exact_hit_mode must be precedent or auto_decide; got %q", cfg.Corpus.ExactHitMode)
+	}
+	if cfg.Corpus.MinSimilarity < 0 || cfg.Corpus.MinSimilarity > 1 {
+		return fmt.Errorf("config: corpus.min_similarity must be between 0.0 and 1.0; got %f", cfg.Corpus.MinSimilarity)
+	}
+	if cfg.Corpus.MaxPrecedents < 0 {
+		return fmt.Errorf("config: corpus.max_precedents must be non-negative; got %d", cfg.Corpus.MaxPrecedents)
+	}
+	if cfg.Corpus.MaxEntries < 0 {
+		return fmt.Errorf("config: corpus.max_entries must be non-negative; got %d", cfg.Corpus.MaxEntries)
+	}
+	if cfg.Corpus.MaxPrecedentsPerDecision < 0 {
+		return fmt.Errorf("config: corpus.max_precedents_per_decision must be non-negative; got %d", cfg.Corpus.MaxPrecedentsPerDecision)
 	}
 	if err := parseDayDuration("corpus.max_age", cfg.Corpus.MaxAge); err != nil {
 		return err
@@ -239,40 +295,19 @@ func (cfg *Config) Validate() error {
 	if err := parseDuration("corpus.prune_interval", cfg.Corpus.PruneInterval); err != nil {
 		return err
 	}
-
-	validDecisions := map[string]bool{"red": true, "yellow": true, "green": true}
-
-	if !validDecisions[cfg.Classifier.DefaultDecision] {
-		return fmt.Errorf("config: classifier.default_decision must be red, yellow, or green; got %q", cfg.Classifier.DefaultDecision)
+	validStoreDecisions := map[string]bool{"": true, "all": true, "allow_only": true, "deny_only": true}
+	if !validStoreDecisions[cfg.Corpus.StoreDecisions] {
+		return fmt.Errorf("config: corpus.store_decisions must be all, allow_only, or deny_only; got %q", cfg.Corpus.StoreDecisions)
 	}
 
-	if cfg.Classifier.UnresolvableExpansion != "" && !validDecisions[cfg.Classifier.UnresolvableExpansion] {
-		return fmt.Errorf("config: classifier.unresolvable_expansion must be red, yellow, or green; got %q", cfg.Classifier.UnresolvableExpansion)
+	// --- Scrubbing: validate extra regex patterns compile ---
+	for i, pattern := range cfg.Scrubbing.ExtraPatterns {
+		if _, err := regexp.Compile(pattern); err != nil {
+			return fmt.Errorf("config: scrubbing.extra_patterns[%d]: invalid regex %q: %w", i, pattern, err)
+		}
 	}
 
-	validExactHitModes := map[string]bool{"": true, "precedent": true, "auto_decide": true}
-	if !validExactHitModes[cfg.Corpus.ExactHitMode] {
-		return fmt.Errorf("config: corpus.exact_hit_mode must be precedent or auto_decide; got %q", cfg.Corpus.ExactHitMode)
-	}
-
-	if cfg.Classifier.MaxASTDepth < 0 {
-		return fmt.Errorf("config: classifier.max_ast_depth must be non-negative; got %d", cfg.Classifier.MaxASTDepth)
-	}
-
-	if cfg.Classifier.MaxCommandLength < 0 {
-		return fmt.Errorf("config: classifier.max_command_length must be non-negative; got %d", cfg.Classifier.MaxCommandLength)
-	}
-
-	if cfg.Corpus.MinSimilarity < 0 || cfg.Corpus.MinSimilarity > 1 {
-		return fmt.Errorf("config: corpus.min_similarity must be between 0.0 and 1.0; got %f", cfg.Corpus.MinSimilarity)
-	}
-
-	validDialects := map[string]bool{"bash": true, "posix": true, "mksh": true}
-	if !validDialects[cfg.Parser.Dialect] {
-		return fmt.Errorf("config: parser.dialect must be bash, posix, or mksh; got %q", cfg.Parser.Dialect)
-	}
-
-	// Validate regex patterns in rules compile.
+	// --- Rules: validate regex patterns compile ---
 	for i, rule := range cfg.Rules.Red {
 		if err := validateRulePattern(rule.Pattern); err != nil {
 			return fmt.Errorf("config: rules.red[%d]: %w", i, err)
@@ -287,6 +322,21 @@ func (cfg *Config) Validate() error {
 		if err := validateRulePattern(rule.Pattern); err != nil {
 			return fmt.Errorf("config: rules.yellow[%d]: %w", i, err)
 		}
+	}
+
+	// --- Telemetry ---
+	if cfg.Telemetry.Enabled && cfg.Telemetry.Endpoint == "" {
+		return fmt.Errorf("config: telemetry.endpoint is required when telemetry is enabled")
+	}
+
+	// --- Log ---
+	validLogLevels := map[string]bool{"": true, "debug": true, "info": true, "warn": true, "error": true}
+	if !validLogLevels[cfg.Log.Level] {
+		return fmt.Errorf("config: log.level must be debug, info, warn, or error; got %q", cfg.Log.Level)
+	}
+	validLogFormats := map[string]bool{"": true, "text": true, "json": true}
+	if !validLogFormats[cfg.Log.Format] {
+		return fmt.Errorf("config: log.format must be text or json; got %q", cfg.Log.Format)
 	}
 
 	return nil

@@ -116,6 +116,61 @@ func TestValidation(t *testing.T) {
 			toml:    "[corpus]\nexact_hit_mode = \"bogus\"",
 			wantErr: "exact_hit_mode",
 		},
+		{
+			name:    "invalid server.listen format",
+			toml:    "[server]\nlisten = \"not-host-port\"",
+			wantErr: "server.listen",
+		},
+		{
+			name:    "negative llm.max_tokens",
+			toml:    "[llm]\nmax_tokens = -1",
+			wantErr: "llm.max_tokens",
+		},
+		{
+			name:    "negative llm.max_file_size",
+			toml:    "[llm]\nmax_file_size = -1",
+			wantErr: "llm.max_file_size",
+		},
+		{
+			name:    "llm.temperature too high",
+			toml:    "[llm]\ntemperature = 3.0",
+			wantErr: "llm.temperature",
+		},
+		{
+			name:    "negative corpus.max_precedents",
+			toml:    "[corpus]\nmax_precedents = -1",
+			wantErr: "corpus.max_precedents",
+		},
+		{
+			name:    "negative corpus.max_entries",
+			toml:    "[corpus]\nmax_entries = -5",
+			wantErr: "corpus.max_entries",
+		},
+		{
+			name:    "invalid scrubbing extra_patterns",
+			toml:    "[scrubbing]\nextra_patterns = [\"[broken\"]",
+			wantErr: "scrubbing.extra_patterns",
+		},
+		{
+			name:    "invalid corpus.store_decisions",
+			toml:    "[corpus]\nstore_decisions = \"maybe\"",
+			wantErr: "store_decisions",
+		},
+		{
+			name:    "telemetry enabled without endpoint",
+			toml:    "[telemetry]\nenabled = true\nendpoint = \"\"",
+			wantErr: "telemetry.endpoint",
+		},
+		{
+			name:    "invalid log level",
+			toml:    "[log]\nlevel = \"trace\"",
+			wantErr: "log.level",
+		},
+		{
+			name:    "invalid log format",
+			toml:    "[log]\nformat = \"xml\"",
+			wantErr: "log.format",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
