@@ -211,6 +211,16 @@ func walkStmt(ws *walkerState, stmt *syntax.Stmt) {
 	directIdx := len(ws.results)
 	walkCmd(ws, stmt.Cmd)
 
+	// Walk redirect operands for embedded substitutions (e.g., > "$(gen)").
+	for _, r := range stmt.Redirs {
+		if r.Word != nil {
+			walkWordSubsts(ws, r.Word)
+		}
+		if r.Hdoc != nil {
+			walkWordSubsts(ws, r.Hdoc)
+		}
+	}
+
 	if len(stmt.Redirs) > 0 && directIdx < len(ws.results) {
 		redirs := extractRedirects(stmt.Redirs)
 		switch c := stmt.Cmd.(type) {
@@ -235,12 +245,13 @@ func walkStmt(ws *walkerState, stmt *syntax.Stmt) {
 						}
 					}
 				} else {
-					// Compound last stage — find last direct CallExpr inside.
-					for i := len(ws.results) - 1; i >= directIdx; i-- {
+					// Compound last stage — propagate to all direct commands in it.
+					// Commands in the last pipeline stage share PipelinePosition == len(stages).
+					maxPos := len(stages)
+					for i := directIdx; i < len(ws.results); i++ {
 						r := &ws.results[i]
-						if r.RawNode != nil && !r.Context.InSubstitution {
+						if r.RawNode != nil && !r.Context.InSubstitution && r.Context.PipelinePosition == maxPos {
 							r.Redirects = append(r.Redirects, redirs...)
-							break
 						}
 					}
 				}
@@ -607,6 +618,12 @@ func resolveCommand(args []*syntax.Word, depth int, wrappers map[string]WrapperD
 	// Skip this wrapper's flags and any special positional tokens.
 	rest = skipWrapperArgs(rest, wrapper)
 
+	// If stripping consumed everything, the wrapper itself is the command
+	// (e.g., "sudo -v", "env FOO=bar" with no inner command).
+	if len(rest) == 0 {
+		return lit, nil, false
+	}
+
 	return resolveCommand(rest, depth+1, wrappers)
 }
 
@@ -631,6 +648,11 @@ func skipWrapperArgs(args []*syntax.Word, def WrapperDef) []*syntax.Word {
 					args = args[1:]
 					continue
 				}
+			}
+			if def.ConsumeFirstPositional && !firstPositionalConsumed {
+				args = args[1:]
+				firstPositionalConsumed = true
+				continue
 			}
 			break
 		}

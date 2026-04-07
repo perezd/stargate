@@ -992,6 +992,109 @@ func TestWalkEnvDashDashCommand(t *testing.T) {
 	}
 }
 
+// ---- Fix 1: wrapper stripping with no inner command ----
+
+func TestWalkWrapperNoInnerCommand(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantName string
+	}{
+		{
+			name:     "sudo -v (no inner command)",
+			input:    "sudo -v",
+			wantName: "sudo",
+		},
+		{
+			name:     "env FOO=bar (no inner command)",
+			input:    "env FOO=bar",
+			wantName: "env",
+		},
+		{
+			name:     "timeout 5s (no inner command)",
+			input:    "timeout 5s",
+			wantName: "timeout",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			infos, err := ParseAndWalk(tt.input, "bash", nil)
+			if err != nil {
+				t.Fatalf("error: %v", err)
+			}
+			if len(infos) == 0 {
+				t.Fatal("expected at least 1 command")
+			}
+			if infos[0].Name != tt.wantName {
+				t.Errorf("expected name=%q, got %q", tt.wantName, infos[0].Name)
+			}
+		})
+	}
+}
+
+// ---- Fix 2: redirect operands walked for substitutions ----
+
+func TestWalkRedirectOperandSubstitution(t *testing.T) {
+	// echo > "$(gen)" — gen inside the redirect target must be found.
+	infos, err := ParseAndWalk(`echo > "$(gen)"`, "bash", nil)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	names := make(map[string]bool)
+	for _, info := range infos {
+		if info.Name != "" {
+			names[info.Name] = true
+		}
+	}
+	if !names["gen"] {
+		t.Errorf("expected 'gen' from redirect operand substitution, got names: %v", names)
+	}
+}
+
+// ---- Fix 3: compound last pipeline stage redirect propagates to all commands ----
+
+func TestWalkPipelineCompoundLastStageAllCommands(t *testing.T) {
+	// "cmd1 | { cmd2; cmd3; } > out" — redirect belongs to cmd2 AND cmd3, not cmd1.
+	infos, err := ParseAndWalk("cmd1 | { cmd2; cmd3; } > out", "bash", nil)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	idx := make(map[string]int)
+	for i, info := range infos {
+		idx[info.Name] = i
+	}
+	for _, name := range []string{"cmd1", "cmd2", "cmd3"} {
+		if _, ok := idx[name]; !ok {
+			t.Fatalf("expected to find %q in results: %+v", name, infos)
+		}
+	}
+	if len(infos[idx["cmd1"]].Redirects) != 0 {
+		t.Errorf("cmd1: expected 0 redirects, got %d", len(infos[idx["cmd1"]].Redirects))
+	}
+	if len(infos[idx["cmd2"]].Redirects) != 1 {
+		t.Errorf("cmd2: expected 1 redirect (compound last stage), got %d", len(infos[idx["cmd2"]].Redirects))
+	}
+	if len(infos[idx["cmd3"]].Redirects) != 1 {
+		t.Errorf("cmd3: expected 1 redirect (compound last stage), got %d", len(infos[idx["cmd3"]].Redirects))
+	}
+}
+
+// ---- Fix 4: ConsumeFirstPositional with non-literal token ----
+
+func TestWalkTimeoutNonLiteralDuration(t *testing.T) {
+	// "timeout "$secs" curl https://example.com" — $secs is non-literal, should still resolve curl.
+	infos, err := ParseAndWalk(`timeout "$secs" curl https://example.com`, "bash", nil)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if len(infos) == 0 {
+		t.Fatal("expected at least 1 command")
+	}
+	if infos[0].Name != "curl" {
+		t.Errorf("expected name=curl after timeout with non-literal duration, got %q", infos[0].Name)
+	}
+}
+
 func TestWalkUnresolvableNoSubcommand(t *testing.T) {
 	// "$CMD status" — unresolvable, Subcommand should be empty, but all
 	// tokens (including the unresolvable command word) should be in Args.
