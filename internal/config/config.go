@@ -11,30 +11,36 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// parseDuration validates that a string is a valid Go duration.
+// parseDuration validates that a string is a valid, non-negative Go duration.
 // Empty strings are allowed (treated as unset).
 func parseDuration(field, value string) error {
 	if value == "" {
 		return nil
 	}
-	_, err := time.ParseDuration(value)
+	d, err := time.ParseDuration(value)
 	if err != nil {
 		return fmt.Errorf("config: %s: invalid duration %q: %w", field, value, err)
+	}
+	if d < 0 {
+		return fmt.Errorf("config: %s: duration must be non-negative; got %q", field, value)
 	}
 	return nil
 }
 
-// parseDayDuration validates duration strings that may use "d" suffix for days.
+// parseDayDuration validates non-negative duration strings that may use "d" suffix for days.
 // Supports Go durations (e.g., "1h") and day-based durations (e.g., "90d").
 func parseDayDuration(field, value string) error {
 	if value == "" {
 		return nil
 	}
 	// Try standard Go duration first.
-	if _, err := time.ParseDuration(value); err == nil {
+	if d, err := time.ParseDuration(value); err == nil {
+		if d < 0 {
+			return fmt.Errorf("config: %s: duration must be non-negative; got %q", field, value)
+		}
 		return nil
 	}
-	// Try strict "Nd" format for days (e.g., "90d", "7d").
+	// Try strict "Nd" format for days (e.g., "90d", "7d"). Always positive by regex.
 	if matched, _ := regexp.MatchString(`^[1-9]\d*d$`, value); matched {
 		return nil
 	}
@@ -242,7 +248,7 @@ func (cfg *Config) Validate() error {
 	}
 	ip := net.ParseIP(host)
 	if ip == nil || !ip.IsLoopback() {
-		return fmt.Errorf("config: server.listen must bind to a loopback IP (127.0.0.1 or [::1]); got %q", cfg.Server.Listen)
+		return fmt.Errorf("config: server.listen must bind to a loopback IP (127.0.0.0/8 or [::1]); got %q", cfg.Server.Listen)
 	}
 	if err := parseDuration("server.timeout", cfg.Server.Timeout); err != nil {
 		return err

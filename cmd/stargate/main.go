@@ -137,8 +137,12 @@ func handleServe(args []string, configPath string, verbose bool) int {
 
 	srv := server.New(cfg)
 	httpSrv := &http.Server{
-		Addr:    listenAddr,
-		Handler: srv,
+		Addr:              listenAddr,
+		Handler:           srv,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	// Handle SIGINT/SIGTERM for graceful shutdown.

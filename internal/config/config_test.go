@@ -82,6 +82,16 @@ func TestValidation(t *testing.T) {
 			wantErr: "server.timeout",
 		},
 		{
+			name:    "negative server timeout",
+			toml:    "[server]\ntimeout = \"-5s\"",
+			wantErr: "non-negative",
+		},
+		{
+			name:    "negative corpus max_age",
+			toml:    "[corpus]\nmax_age = \"-1h\"",
+			wantErr: "non-negative",
+		},
+		{
 			name:    "invalid corpus max_age",
 			toml:    "[corpus]\nmax_age = \"bogus\"",
 			wantErr: "corpus.max_age",
