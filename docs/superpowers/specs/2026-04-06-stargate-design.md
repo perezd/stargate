@@ -1407,8 +1407,7 @@ All exit-2 paths are fail-closed.
 ```json
 {
   "status": "ok",
-  "uptime_seconds": 3600,
-  "rules": { "red": 14, "yellow": 10, "green": 14 }
+  "uptime_seconds": 3600
 }
 ```
 
