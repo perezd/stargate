@@ -3,6 +3,7 @@ package parser
 import (
 	"bytes"
 	"strings"
+	"unicode"
 
 	"github.com/perezd/stargate/internal/config"
 	"github.com/perezd/stargate/internal/rules"
@@ -606,10 +607,9 @@ func extractEnv(assigns []*syntax.Assign) map[string]string {
 }
 
 // resolveCommand strips prefix wrapper commands from args and returns the
-// resolved command name and remaining argument words. depth limits recursion.
-// resolveCommand resolves the actual command name by stripping wrapper prefixes.
-// Returns the command name, remaining args, and whether the command is in
-// "lookup mode" (e.g., "command -v foo" — not executing, just querying).
+// resolved command name, remaining argument words, and whether the command is
+// in "lookup mode" (e.g., "command -v foo" — not executing, just querying).
+// depth limits recursion.
 func resolveCommand(args []*syntax.Word, depth int, wrappers map[string]WrapperDef) (name string, remaining []*syntax.Word, lookupMode bool) {
 	if depth >= maxWrapperDepth {
 		return "", args, false
@@ -681,6 +681,27 @@ func resolveCommand(args []*syntax.Word, depth int, wrappers map[string]WrapperD
 //   - -- terminator
 //   - VAR=val assignments (when ConsumeEnvAssigns is set)
 //   - The first non-flag positional (when ConsumeFirstPositional is set, e.g. timeout duration)
+// isShellAssignment returns true if s looks like a shell variable assignment
+// (NAME=... where NAME is a valid identifier: [a-zA-Z_][a-zA-Z0-9_]*).
+func isShellAssignment(s string) bool {
+	name, _, ok := strings.Cut(s, "=")
+	if !ok || name == "" {
+		return false
+	}
+	for i, r := range name {
+		if i == 0 {
+			if !unicode.IsLetter(r) && r != '_' {
+				return false
+			}
+		} else {
+			if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func skipWrapperArgs(args []*syntax.Word, def WrapperDef) []*syntax.Word {
 	firstPositionalConsumed := false
 	endOfOptions := false
@@ -690,7 +711,7 @@ func skipWrapperArgs(args []*syntax.Word, def WrapperDef) []*syntax.Word {
 			// Non-literal word — still check for env assignments like FOO="$bar"
 			if def.ConsumeEnvAssigns {
 				raw := wordToString(args[0])
-				if strings.Contains(raw, "=") && !strings.HasPrefix(raw, "-") {
+				if isShellAssignment(raw) {
 					args = args[1:]
 					continue
 				}
@@ -732,8 +753,9 @@ func skipWrapperArgs(args []*syntax.Word, def WrapperDef) []*syntax.Word {
 			continue
 		}
 
-		// VAR=val assignment (env-like wrappers).
-		if def.ConsumeEnvAssigns && strings.Contains(lit, "=") {
+		// VAR=val assignment (env-like wrappers). Only match valid shell
+		// identifiers before = to avoid consuming URLs or other =-containing args.
+		if def.ConsumeEnvAssigns && isShellAssignment(lit) {
 			args = args[1:]
 			continue
 		}
