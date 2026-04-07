@@ -33,12 +33,9 @@ func parseDayDuration(field, value string) error {
 	if _, err := time.ParseDuration(value); err == nil {
 		return nil
 	}
-	// Try "Nd" format for days.
-	if len(value) > 1 && value[len(value)-1] == 'd' {
-		var n int
-		if _, err := fmt.Sscanf(value, "%dd", &n); err == nil && n > 0 {
-			return nil
-		}
+	// Try strict "Nd" format for days (e.g., "90d", "7d").
+	if matched, _ := regexp.MatchString(`^[1-9]\d*d$`, value); matched {
+		return nil
 	}
 	return fmt.Errorf("config: %s: invalid duration %q (use Go durations like \"1h\" or day-based like \"90d\")", field, value)
 }
