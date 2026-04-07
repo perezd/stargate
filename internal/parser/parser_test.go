@@ -1200,3 +1200,18 @@ func TestWalkCasePatternSubstitution(t *testing.T) {
 		t.Errorf("expected 'pat' from case pattern substitution, got names: %v", names)
 	}
 }
+
+func TestWalkDynamicFirstPositionalBlocksSubcommand(t *testing.T) {
+	// "git $X status" — $X occupies the subcommand slot (unresolvable),
+	// so "status" should NOT be promoted to subcommand.
+	infos, err := ParseAndWalk("git $X status", "bash", nil)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if len(infos) == 0 {
+		t.Fatal("expected at least 1 command")
+	}
+	if infos[0].Subcommand != "" {
+		t.Errorf("expected empty Subcommand (first positional was dynamic), got %q", infos[0].Subcommand)
+	}
+}

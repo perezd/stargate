@@ -773,6 +773,11 @@ func classifyArgs(cmdName string, args []*syntax.Word, commandFlags map[string]m
 			raw := wordToString(w)
 			positional = append(positional, raw)
 			// Don't promote dynamic words to subcommand — they're unresolvable.
+			// Mark the subcommand slot as consumed so later positionals aren't
+			// promoted either (e.g., "git $X status" shouldn't set subcommand="status").
+			if !subcommandFound {
+				subcommandFound = true
+			}
 			continue
 		}
 
