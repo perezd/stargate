@@ -23,7 +23,11 @@ type Server struct {
 }
 
 // New creates a new Server with the given config and registers all routes.
+// Panics if cfg is nil.
 func New(cfg *config.Config) *Server {
+	if cfg == nil {
+		panic("server.New: config must not be nil")
+	}
 	s := &Server{
 		mux:       http.NewServeMux(),
 		startTime: time.Now(),

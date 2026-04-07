@@ -5,9 +5,43 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
+
+// parseDuration validates that a string is a valid Go duration.
+// Empty strings are allowed (treated as unset).
+func parseDuration(field, value string) error {
+	if value == "" {
+		return nil
+	}
+	_, err := time.ParseDuration(value)
+	if err != nil {
+		return fmt.Errorf("config: %s: invalid duration %q: %w", field, value, err)
+	}
+	return nil
+}
+
+// parseDayDuration validates duration strings that may use "d" suffix for days.
+// Supports Go durations (e.g., "1h") and day-based durations (e.g., "90d").
+func parseDayDuration(field, value string) error {
+	if value == "" {
+		return nil
+	}
+	// Try standard Go duration first.
+	if _, err := time.ParseDuration(value); err == nil {
+		return nil
+	}
+	// Try "Nd" format for days.
+	if len(value) > 1 && value[len(value)-1] == 'd' {
+		var n int
+		if _, err := fmt.Sscanf(value, "%dd", &n); err == nil && n > 0 {
+			return nil
+		}
+	}
+	return fmt.Errorf("config: %s: invalid duration %q (use Go durations like \"1h\" or day-based like \"90d\")", field, value)
+}
 
 // validateRulePattern checks that a rule's regex pattern compiles.
 func validateRulePattern(pattern string) error {
@@ -165,6 +199,9 @@ func Load(path string) (*Config, error) {
 
 // applyDefaults fills in sensible defaults for optional fields.
 func applyDefaults(cfg *Config) {
+	if cfg.Server.Listen == "" {
+		cfg.Server.Listen = "127.0.0.1:9099"
+	}
 	if cfg.LLM.Provider == "" {
 		cfg.LLM.Provider = "anthropic"
 	}
@@ -187,6 +224,22 @@ func applyDefaults(cfg *Config) {
 
 // Validate checks that required fields have acceptable values.
 func (cfg *Config) Validate() error {
+	// Server: listen is required.
+	if cfg.Server.Listen == "" {
+		return fmt.Errorf("config: server.listen is required")
+	}
+
+	// Duration fields.
+	if err := parseDuration("server.timeout", cfg.Server.Timeout); err != nil {
+		return err
+	}
+	if err := parseDayDuration("corpus.max_age", cfg.Corpus.MaxAge); err != nil {
+		return err
+	}
+	if err := parseDuration("corpus.prune_interval", cfg.Corpus.PruneInterval); err != nil {
+		return err
+	}
+
 	validDecisions := map[string]bool{"red": true, "yellow": true, "green": true}
 
 	if !validDecisions[cfg.Classifier.DefaultDecision] {
