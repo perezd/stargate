@@ -399,7 +399,9 @@ func walkWordSubsts(ws *walkerState, w *syntax.Word) {
 				}
 			}
 		case *syntax.ProcSubst:
+			ws.substDepth++
 			walkStmts(ws, p.Stmts)
+			ws.substDepth--
 		}
 	}
 }
