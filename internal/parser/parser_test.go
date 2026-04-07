@@ -681,6 +681,36 @@ func TestWalkEnvPrefixWithFlags(t *testing.T) {
 	}
 }
 
+func TestWalkGlobalFlagArgsNotInArgs(t *testing.T) {
+	// "git -C /tmp status" — /tmp is consumed by -C, should not appear in Args.
+	infos, err := ParseAndWalk("git -C /tmp status", "bash")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if len(infos) == 0 {
+		t.Fatal("expected at least 1 command")
+	}
+	for _, arg := range infos[0].Args {
+		if arg == "/tmp" {
+			t.Error("global flag argument /tmp should not appear in Args")
+		}
+	}
+}
+
+func TestWalkTimeoutWithKillFlag(t *testing.T) {
+	// "timeout -k 5s 10s cmd" — -k consumes 5s, 10s is the duration, cmd is the command.
+	infos, err := ParseAndWalk("timeout -k 5s 10s cmd", "bash")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if len(infos) == 0 {
+		t.Fatal("expected at least 1 command")
+	}
+	if infos[0].Name != "cmd" {
+		t.Errorf("expected name=cmd, got %q", infos[0].Name)
+	}
+}
+
 func TestWalkSubcommandGlobalFlagSkipping(t *testing.T) {
 	tests := []struct {
 		cmd     string

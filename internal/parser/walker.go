@@ -157,13 +157,14 @@ func walkStmt(ws *walkerState, stmt *syntax.Stmt) {
 	if stmt == nil {
 		return
 	}
-	// Record where the direct command will land before walking nested substs.
+	// Only attach statement-level redirects when the statement's direct Cmd is
+	// a CallExpr. For compound commands (subshells, blocks, if/while), redirects
+	// apply to the compound itself, not to the first nested CallExpr inside.
+	_, isCallExpr := stmt.Cmd.(*syntax.CallExpr)
 	directIdx := len(ws.results)
 	walkCmd(ws, stmt.Cmd)
 
-	// Attach redirects only to the direct command (at directIdx), not to any
-	// CommandInfos produced by nested command substitutions inside arguments.
-	if len(stmt.Redirs) > 0 && directIdx < len(ws.results) {
+	if isCallExpr && len(stmt.Redirs) > 0 && directIdx < len(ws.results) {
 		redirs := extractRedirects(stmt.Redirs)
 		ws.results[directIdx].Redirects = append(ws.results[directIdx].Redirects, redirs...)
 	}
@@ -496,20 +497,33 @@ func skipNiceFlags(args []*syntax.Word) []*syntax.Word {
 	return args
 }
 
-// skipTimeoutDuration skips timeout's duration argument (first non-flag arg).
+// skipTimeoutDuration skips timeout's flags and duration argument.
+// Handles flags that consume arguments: -k/--kill-after, -s/--signal.
 func skipTimeoutDuration(args []*syntax.Word) []*syntax.Word {
+	takesArg := map[string]bool{
+		"-k": true, "--kill-after": true,
+		"-s": true, "--signal": true,
+	}
 	for len(args) > 0 {
 		lit, ok := wordLiteral(args[0])
 		if !ok {
 			break
 		}
-		if strings.HasPrefix(lit, "-") {
+		if !strings.HasPrefix(lit, "-") {
+			// First non-flag is the duration — skip it and return.
 			args = args[1:]
-			continue
+			break
 		}
-		// First non-flag is the duration.
+		// Check for --flag=value form.
+		flagName := lit
+		if idx := strings.Index(lit, "="); idx >= 0 {
+			flagName = lit[:idx]
+		}
 		args = args[1:]
-		break
+		// If this flag consumes an argument and wasn't --flag=value, skip next.
+		if takesArg[flagName] && !strings.Contains(lit, "=") && len(args) > 0 {
+			args = args[1:]
+		}
 	}
 	return args
 }
@@ -614,15 +628,10 @@ func classifyArgs(cmdName string, args []*syntax.Word) (flags []string, position
 					flagName = lit[:idx]
 				}
 				if argc, known := globalFlags[flagName]; known && argc > 0 && !strings.Contains(lit, "=") {
-					// Skip the next `argc` args (they belong to this flag).
+					// Skip the next `argc` args — they belong to this global
+					// flag and are not positional arguments for the command.
 					for j := 0; j < argc && i+1 < len(args); j++ {
 						i++
-						argLit, argOk := wordLiteral(args[i])
-						if argOk {
-							positional = append(positional, argLit)
-						} else {
-							positional = append(positional, wordToString(args[i]))
-						}
 					}
 				}
 			}
