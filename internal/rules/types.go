@@ -23,7 +23,7 @@ type RedirectInfo struct {
 
 // CommandContext describes where a command appears in the AST structure.
 type CommandContext struct {
-	PipelinePosition int    // 0 = not in pipe, 1 = source, 2+ = sink
+	PipelinePosition int    // 0 = not in pipe, 1 = first stage, 2+ = subsequent stages
 	SubshellDepth    int    // Nesting depth in subshells
 	InSubstitution   bool   // Inside $() or ``
 	InCondition      bool   // Inside if/while test

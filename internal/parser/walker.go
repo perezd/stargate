@@ -474,7 +474,7 @@ func extractEnv(assigns []*syntax.Assign) map[string]string {
 // resolved command name and remaining argument words. depth limits recursion.
 func resolveCommand(args []*syntax.Word, depth int, wrappers map[string]WrapperDef) (string, []*syntax.Word) {
 	if depth >= 16 {
-		return "", nil
+		return "", args
 	}
 	if len(args) == 0 {
 		return "", nil

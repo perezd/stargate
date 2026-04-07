@@ -458,6 +458,40 @@ func (cfg *Config) Validate() error {
 		}
 	}
 
+	// --- Wrappers ---
+	wrappersSeen := make(map[string]bool)
+	for i, w := range cfg.Wrappers {
+		if w.Command == "" {
+			return fmt.Errorf("config: wrappers[%d]: command must not be empty", i)
+		}
+		if wrappersSeen[w.Command] {
+			return fmt.Errorf("config: wrappers[%d]: duplicate command %q", i, w.Command)
+		}
+		wrappersSeen[w.Command] = true
+		for flag, argc := range w.Flags {
+			if argc < 0 {
+				return fmt.Errorf("config: wrappers[%d] (%s): flag %q arg count must be non-negative; got %d", i, w.Command, flag, argc)
+			}
+		}
+	}
+
+	// --- Commands (global flags) ---
+	commandsSeen := make(map[string]bool)
+	for i, c := range cfg.Commands {
+		if c.Command == "" {
+			return fmt.Errorf("config: commands[%d]: command must not be empty", i)
+		}
+		if commandsSeen[c.Command] {
+			return fmt.Errorf("config: commands[%d]: duplicate command %q", i, c.Command)
+		}
+		commandsSeen[c.Command] = true
+		for flag, argc := range c.Flags {
+			if argc < 0 {
+				return fmt.Errorf("config: commands[%d] (%s): flag %q arg count must be non-negative; got %d", i, c.Command, flag, argc)
+			}
+		}
+	}
+
 	// --- Telemetry ---
 	if cfg.Telemetry.Enabled && cfg.Telemetry.Endpoint == "" {
 		return fmt.Errorf("config: telemetry.endpoint is required when telemetry is enabled")
