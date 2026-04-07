@@ -606,6 +606,35 @@ func TestWalkPipelineRedirectAttachedToLastStage(t *testing.T) {
 	}
 }
 
+func TestWalkPipelineRedirectNotAttachedToSubstitution(t *testing.T) {
+	// "cmd1 | echo $(cat f) > out" — redirect belongs to echo, not cat inside $().
+	infos, err := ParseAndWalk("cmd1 | echo $(cat f) > out", "bash")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	echoIdx, catIdx := -1, -1
+	for i, info := range infos {
+		switch info.Name {
+		case "echo":
+			echoIdx = i
+		case "cat":
+			catIdx = i
+		}
+	}
+	if echoIdx < 0 {
+		t.Fatal("expected to find 'echo'")
+	}
+	if catIdx < 0 {
+		t.Fatal("expected to find 'cat' inside $()")
+	}
+	if len(infos[echoIdx].Redirects) != 1 {
+		t.Errorf("echo: expected 1 redirect, got %d", len(infos[echoIdx].Redirects))
+	}
+	if len(infos[catIdx].Redirects) != 0 {
+		t.Errorf("cat: expected 0 redirects (inside $()), got %d", len(infos[catIdx].Redirects))
+	}
+}
+
 // ---- End of options ----
 
 func TestWalkEndOfOptions(t *testing.T) {

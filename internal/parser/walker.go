@@ -175,11 +175,12 @@ func walkStmt(ws *walkerState, stmt *syntax.Stmt) {
 			}
 		case *syntax.BinaryCmd:
 			// For pipelines (cmd1 | cmd2 > out), attach to the last stage's
-			// direct command. Walk backwards to find the last result with a
-			// RawNode (i.e., a direct CallExpr, not a $() nested command).
+			// direct command. Walk backwards, excluding commands inside $()
+			// substitutions to avoid misattributing redirects.
 			for i := len(ws.results) - 1; i >= directIdx; i-- {
-				if ws.results[i].RawNode != nil && ws.results[i].Context.PipelinePosition > 0 {
-					ws.results[i].Redirects = append(ws.results[i].Redirects, redirs...)
+				r := &ws.results[i]
+				if r.RawNode != nil && r.Context.PipelinePosition > 0 && !r.Context.InSubstitution {
+					r.Redirects = append(r.Redirects, redirs...)
 					break
 				}
 			}
