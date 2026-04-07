@@ -10,11 +10,6 @@ import (
 	"github.com/perezd/stargate/internal/config"
 )
 
-// Version is the server version string. Override at build time via:
-//
-//	go build -ldflags="-X github.com/perezd/stargate/internal/server.Version=1.2.3"
-var Version = "0.2.0-dev"
-
 // Server is the stargate HTTP server.
 type Server struct {
 	mux       *http.ServeMux
@@ -56,7 +51,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	resp := map[string]any{
 		"status":         "ok",
-		"version":        Version,
 		"uptime_seconds": uptime,
 		"rules": map[string]int{
 			"red":    len(cfg.Rules.Red),
