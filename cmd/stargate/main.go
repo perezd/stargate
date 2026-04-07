@@ -129,7 +129,11 @@ func handleServe(args []string, configPath string, verbose bool) int {
 		listenAddr = "127.0.0.1:9099"
 	}
 
-	// Enforce loopback-only binding per security spec.
+	// Validate and enforce loopback-only binding per security spec.
+	if _, _, err := net.SplitHostPort(listenAddr); err != nil {
+		fmt.Fprintf(os.Stderr, "serve: invalid listen address %q: %v\n", listenAddr, err)
+		return 1
+	}
 	if !isLoopbackAddr(listenAddr) {
 		fmt.Fprintf(os.Stderr, "serve: listen address %q is not loopback; stargate must bind to 127.0.0.1 or [::1]\n", listenAddr)
 		return 1

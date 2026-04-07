@@ -107,15 +107,23 @@ func TestHandlers_UnimplementedReturnNonZero(t *testing.T) {
 	}
 }
 
-func TestConfigValidate_ValidConfig(t *testing.T) {
+func writeTestConfig(t *testing.T, content string) string {
+	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "stargate.toml")
-	os.WriteFile(path, []byte(`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test config: %v", err)
+	}
+	return path
+}
+
+func TestConfigValidate_ValidConfig(t *testing.T) {
+	path := writeTestConfig(t, `
 [server]
 listen = "127.0.0.1:9099"
 [classifier]
 default_decision = "yellow"
-`), 0644)
+`)
 
 	code := handleConfigValidate(path, false)
 	if code != 0 {
@@ -124,12 +132,10 @@ default_decision = "yellow"
 }
 
 func TestConfigValidate_InvalidConfig(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "stargate.toml")
-	os.WriteFile(path, []byte(`
+	path := writeTestConfig(t, `
 [classifier]
 default_decision = "invalid"
-`), 0644)
+`)
 
 	devNull, _ := os.Open(os.DevNull)
 	origStderr := os.Stderr

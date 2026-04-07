@@ -3,15 +3,24 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/perezd/stargate/internal/config"
 )
 
-func TestLoadMinimalConfig(t *testing.T) {
+func writeConfig(t *testing.T, content string) string {
+	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "stargate.toml")
-	os.WriteFile(path, []byte(`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test config: %v", err)
+	}
+	return path
+}
+
+func TestLoadMinimalConfig(t *testing.T) {
+	path := writeConfig(t, `
 [server]
 listen = "127.0.0.1:9099"
 timeout = "10s"
@@ -23,7 +32,7 @@ dialect = "bash"
 default_decision = "yellow"
 max_ast_depth = 64
 max_command_length = 65536
-`), 0644)
+`)
 
 	cfg, err := config.Load(path)
 	if err != nil {
@@ -38,12 +47,10 @@ max_command_length = 65536
 }
 
 func TestLoadConfigValidation(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "stargate.toml")
-	os.WriteFile(path, []byte(`
+	path := writeConfig(t, `
 [classifier]
 default_decision = "invalid"
-`), 0644)
+`)
 
 	_, err := config.Load(path)
 	if err == nil {
@@ -66,7 +73,7 @@ func TestValidation(t *testing.T) {
 	}{
 		{
 			name:    "invalid dialect",
-			toml:    `[parser]\ndialect = "fish"`,
+			toml:    "[parser]\ndialect = \"fish\"",
 			wantErr: "dialect",
 		},
 		{
@@ -112,9 +119,7 @@ func TestValidation(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			path := filepath.Join(dir, "stargate.toml")
-			os.WriteFile(path, []byte(tc.toml), 0644)
+			path := writeConfig(t, tc.toml)
 
 			_, err := config.Load(path)
 			if tc.wantErr == "" {
@@ -126,22 +131,9 @@ func TestValidation(t *testing.T) {
 			if err == nil {
 				t.Fatalf("expected error containing %q, got nil", tc.wantErr)
 			}
-			if !contains(err.Error(), tc.wantErr) {
+			if !strings.Contains(err.Error(), tc.wantErr) {
 				t.Errorf("error = %q, want it to contain %q", err.Error(), tc.wantErr)
 			}
 		})
 	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && searchString(s, substr)
-}
-
-func searchString(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
