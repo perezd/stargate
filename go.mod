@@ -6,4 +6,4 @@ toolchain go1.26.1
 
 require github.com/BurntSushi/toml v1.6.0
 
-require mvdan.cc/sh/v3 v3.13.1 // indirect
+require mvdan.cc/sh/v3 v3.13.1

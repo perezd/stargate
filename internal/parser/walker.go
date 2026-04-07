@@ -107,6 +107,9 @@ type walkerState struct {
 	// Command substitution nesting depth.
 	substDepth int
 
+	// Condition nesting depth (if/while condition lists).
+	conditionDepth int
+
 	// Function name stack.
 	funcStack []string
 
@@ -119,6 +122,7 @@ func (ws *walkerState) currentContext() rules.CommandContext {
 	ctx := rules.CommandContext{
 		SubshellDepth:  ws.subshellDepth,
 		InSubstitution: ws.substDepth > 0,
+		InCondition:    ws.conditionDepth > 0,
 	}
 	if len(ws.pipelineStack) > 0 {
 		ctx.PipelinePosition = ws.pipelineStack[len(ws.pipelineStack)-1]
@@ -146,22 +150,22 @@ func walkStmts(ws *walkerState, stmts []*syntax.Stmt) {
 	}
 }
 
-// walkStmt processes a single statement and attaches redirects to any
-// CommandInfos extracted from it.
+// walkStmt processes a single statement and attaches redirects to the
+// CommandInfo corresponding to the statement's direct Cmd only (not to
+// commands inside $() substitutions).
 func walkStmt(ws *walkerState, stmt *syntax.Stmt) {
 	if stmt == nil {
 		return
 	}
-	beforeCount := len(ws.results)
+	// Record where the direct command will land before walking nested substs.
+	directIdx := len(ws.results)
 	walkCmd(ws, stmt.Cmd)
-	afterCount := len(ws.results)
 
-	// Attach redirects from the Stmt to every CommandInfo added during it.
-	if len(stmt.Redirs) > 0 {
+	// Attach redirects only to the direct command (at directIdx), not to any
+	// CommandInfos produced by nested command substitutions inside arguments.
+	if len(stmt.Redirs) > 0 && directIdx < len(ws.results) {
 		redirs := extractRedirects(stmt.Redirs)
-		for i := beforeCount; i < afterCount; i++ {
-			ws.results[i].Redirects = append(ws.results[i].Redirects, redirs...)
-		}
+		ws.results[directIdx].Redirects = append(ws.results[directIdx].Redirects, redirs...)
 	}
 }
 
@@ -197,7 +201,9 @@ func walkCmd(ws *walkerState, cmd syntax.Command) {
 		walkIfClause(ws, c)
 
 	case *syntax.WhileClause:
+		ws.conditionDepth++
 		walkStmts(ws, c.Cond)
+		ws.conditionDepth--
 		walkStmts(ws, c.Do)
 
 	case *syntax.ForClause:
@@ -292,7 +298,9 @@ func binCmdOpString(op syntax.BinCmdOperator) string {
 
 // walkIfClause handles if/elif/else chains.
 func walkIfClause(ws *walkerState, ic *syntax.IfClause) {
+	ws.conditionDepth++
 	walkStmts(ws, ic.Cond)
+	ws.conditionDepth--
 	walkStmts(ws, ic.Then)
 	if ic.Else != nil {
 		walkIfClause(ws, ic.Else)
@@ -385,7 +393,7 @@ func extractEnv(assigns []*syntax.Assign) map[string]string {
 // resolveCommand strips prefix wrapper commands from args and returns the
 // resolved command name and remaining argument words. depth limits recursion.
 func resolveCommand(args []*syntax.Word, depth int) (string, []*syntax.Word) {
-	if depth > 16 {
+	if depth >= 16 {
 		return "", nil
 	}
 	if len(args) == 0 {
@@ -431,7 +439,10 @@ func resolveCommand(args []*syntax.Word, depth int) (string, []*syntax.Word) {
 
 // skipEnvFlags skips env-specific flags and VAR=val assignments.
 func skipEnvFlags(args []*syntax.Word) []*syntax.Word {
-	envFlags := map[string]bool{"-i": true, "-S": true, "--": true}
+	// Flags that take no extra argument.
+	noArgFlags := map[string]bool{"-i": true, "--": true}
+	// Flags that consume the next argument.
+	takesArgFlags := map[string]bool{"-u": true, "-S": true}
 	for len(args) > 0 {
 		lit, ok := wordLiteral(args[0])
 		if !ok {
@@ -441,14 +452,14 @@ func skipEnvFlags(args []*syntax.Word) []*syntax.Word {
 			args = args[1:]
 			break
 		}
-		if lit == "-u" {
-			args = args[1:] // skip -u
+		if takesArgFlags[lit] {
+			args = args[1:] // skip flag
 			if len(args) > 0 {
-				args = args[1:] // skip its argument (name)
+				args = args[1:] // skip its argument
 			}
 			continue
 		}
-		if envFlags[lit] {
+		if noArgFlags[lit] {
 			args = args[1:]
 			continue
 		}
@@ -508,11 +519,11 @@ func skipSudoFlags(args []*syntax.Word) []*syntax.Word {
 	// Flags that consume the next argument.
 	takesArg := map[string]bool{
 		"-u": true, "-g": true, "-c": true, "-D": true,
-		"-h": true, "-r": true, "-t": true, "-T": true, "-U": true,
+		"-r": true, "-t": true, "-T": true, "-U": true,
 	}
 	// Flags that take no extra argument.
 	noArg := map[string]bool{
-		"-i": true, "-s": true, "-l": true, "-v": true,
+		"-h": true, "-i": true, "-s": true, "-l": true, "-v": true,
 		"-k": true, "-K": true, "-n": true, "-b": true,
 		"-e": true, "-A": true, "-S": true, "-H": true,
 		"-P": true,

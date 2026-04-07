@@ -301,11 +301,7 @@ func TestWalkPrefixStripping(t *testing.T) {
 			if err != nil {
 				t.Fatalf("error: %v", err)
 			}
-			// Find the first command with a non-empty Name that matches our
-			// expectation (the outermost prefix command is also extracted
-			// before stripping in some cases — we want the *resolved* one).
-			// Actually the walker extracts ONE CommandInfo per CallExpr with
-			// the resolved name. So infos[0] is the resolved command.
+			// The walker extracts one CommandInfo per CallExpr using the resolved command name, so infos[0] is the command under test.
 			if len(infos) == 0 {
 				t.Fatalf("expected at least 1 command, got 0")
 			}
@@ -524,6 +520,40 @@ func TestWalkRedirects(t *testing.T) {
 	}
 }
 
+func TestWalkRedirectsNotAttachedToSubstitutionCommands(t *testing.T) {
+	// echo $(cat file) > out.txt — the redirect belongs to echo, not cat.
+	infos, err := ParseAndWalk("echo $(cat file) > out.txt", "bash")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	// Expect two commands: echo and cat (inside $()).
+	if len(infos) < 2 {
+		t.Fatalf("expected at least 2 commands (echo + cat), got %d", len(infos))
+	}
+	echoIdx, catIdx := -1, -1
+	for i, info := range infos {
+		switch info.Name {
+		case "echo":
+			echoIdx = i
+		case "cat":
+			catIdx = i
+		}
+	}
+	if echoIdx < 0 {
+		t.Fatal("expected to find 'echo' command")
+	}
+	if catIdx < 0 {
+		t.Fatal("expected to find 'cat' command inside substitution")
+	}
+	if len(infos[echoIdx].Redirects) != 1 {
+		t.Errorf("echo: expected 1 redirect, got %d: %+v", len(infos[echoIdx].Redirects), infos[echoIdx].Redirects)
+	}
+	if len(infos[catIdx].Redirects) != 0 {
+		t.Errorf("cat: expected 0 redirects (redirect should not propagate into $()), got %d: %+v",
+			len(infos[catIdx].Redirects), infos[catIdx].Redirects)
+	}
+}
+
 // ---- End of options ----
 
 func TestWalkEndOfOptions(t *testing.T) {
@@ -576,6 +606,38 @@ func TestWalkFunctionBody(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected to find 'rm' command inside function body")
+	}
+}
+
+func TestWalkInCondition(t *testing.T) {
+	// if cmd1; then cmd2; fi — cmd1 is in the condition, cmd2 is in the body.
+	infos, err := ParseAndWalk("if cmd1; then cmd2; fi", "bash")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if len(infos) != 2 {
+		t.Fatalf("expected 2 commands, got %d", len(infos))
+	}
+	cmd1idx, cmd2idx := -1, -1
+	for i, info := range infos {
+		switch info.Name {
+		case "cmd1":
+			cmd1idx = i
+		case "cmd2":
+			cmd2idx = i
+		}
+	}
+	if cmd1idx < 0 {
+		t.Fatal("expected to find 'cmd1'")
+	}
+	if cmd2idx < 0 {
+		t.Fatal("expected to find 'cmd2'")
+	}
+	if !infos[cmd1idx].Context.InCondition {
+		t.Errorf("cmd1: expected InCondition=true (it's in the if condition), got false")
+	}
+	if infos[cmd2idx].Context.InCondition {
+		t.Errorf("cmd2: expected InCondition=false (it's in the then body), got true")
 	}
 }
 
