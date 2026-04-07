@@ -9,6 +9,10 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
+// maxWrapperDepth is the maximum recursion depth for prefix stripping.
+// Commands nested deeper than this are treated as unresolvable.
+const maxWrapperDepth = 16
+
 // WrapperDef holds the parsed metadata for a single wrapper command.
 type WrapperDef struct {
 	// Flags maps flag name to the number of extra arguments it consumes (0 = boolean flag).
@@ -418,25 +422,57 @@ func walkWordSubsts(ws *walkerState, w *syntax.Word) {
 	if w == nil {
 		return
 	}
-	for _, part := range w.Parts {
+	walkWordParts(ws, w.Parts)
+}
+
+// walkWordParts recursively walks word parts to find all nested command
+// substitutions, including those inside parameter expansions (${x:-$(cmd)}),
+// arithmetic expansions ($(($(cmd)))), double quotes, and process substitutions.
+func walkWordParts(ws *walkerState, parts []syntax.WordPart) {
+	for _, part := range parts {
 		switch p := part.(type) {
 		case *syntax.CmdSubst:
 			ws.substDepth++
 			walkStmts(ws, p.Stmts)
 			ws.substDepth--
 		case *syntax.DblQuoted:
-			for _, dp := range p.Parts {
-				if cs, ok := dp.(*syntax.CmdSubst); ok {
-					ws.substDepth++
-					walkStmts(ws, cs.Stmts)
-					ws.substDepth--
-				}
-			}
+			walkWordParts(ws, p.Parts)
 		case *syntax.ProcSubst:
 			ws.substDepth++
 			walkStmts(ws, p.Stmts)
 			ws.substDepth--
+		case *syntax.ParamExp:
+			// Walk nested words in parameter expansions:
+			// ${x:-$(cmd)}, ${x:+$(cmd)}, ${x/pattern/$(cmd)}, etc.
+			if p.Exp != nil {
+				walkWordSubsts(ws, p.Exp.Word)
+			}
+			if p.Repl != nil {
+				walkWordSubsts(ws, p.Repl.Orig)
+				walkWordSubsts(ws, p.Repl.With)
+			}
+		case *syntax.ArithmExp:
+			// Walk nested expressions in arithmetic expansions: $(($(cmd) + 1))
+			if p.X != nil {
+				walkArithmExpr(ws, p.X)
+			}
 		}
+	}
+}
+
+// walkArithmExpr recursively walks arithmetic expressions to find nested
+// command substitutions (e.g., $(($(gen) + 1))).
+func walkArithmExpr(ws *walkerState, expr syntax.ArithmExpr) {
+	switch e := expr.(type) {
+	case *syntax.Word:
+		walkWordParts(ws, e.Parts)
+	case *syntax.BinaryArithm:
+		walkArithmExpr(ws, e.X)
+		walkArithmExpr(ws, e.Y)
+	case *syntax.UnaryArithm:
+		walkArithmExpr(ws, e.X)
+	case *syntax.ParenArithm:
+		walkArithmExpr(ws, e.X)
 	}
 }
 
@@ -507,7 +543,7 @@ func extractEnv(assigns []*syntax.Assign) map[string]string {
 // resolveCommand strips prefix wrapper commands from args and returns the
 // resolved command name and remaining argument words. depth limits recursion.
 func resolveCommand(args []*syntax.Word, depth int, wrappers map[string]WrapperDef) (string, []*syntax.Word) {
-	if depth >= 16 {
+	if depth >= maxWrapperDepth {
 		return "", args
 	}
 	if len(args) == 0 {
@@ -563,20 +599,22 @@ func resolveCommand(args []*syntax.Word, depth int, wrappers map[string]WrapperD
 //   - The first non-flag positional (when ConsumeFirstPositional is set, e.g. timeout duration)
 func skipWrapperArgs(args []*syntax.Word, def WrapperDef) []*syntax.Word {
 	firstPositionalConsumed := false
+	endOfOptions := false
 	for len(args) > 0 {
 		lit, ok := wordLiteral(args[0])
 		if !ok {
 			break
 		}
 
-		// -- terminates flag processing; consume it and stop.
-		if lit == "--" {
+		// -- terminates flag processing but not env-assign/positional consumption.
+		if !endOfOptions && lit == "--" {
 			args = args[1:]
-			break
+			endOfOptions = true
+			continue
 		}
 
-		// Flag token.
-		if strings.HasPrefix(lit, "-") {
+		// Flag token (only before --).
+		if !endOfOptions && strings.HasPrefix(lit, "-") {
 			flagName, _, hasEq := strings.Cut(lit, "=")
 			args = args[1:]
 			// Consume extra positional arguments this flag takes (only when not --flag=val form).

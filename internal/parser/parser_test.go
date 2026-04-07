@@ -949,6 +949,54 @@ func TestWalkCommandDashV(t *testing.T) {
 	}
 }
 
+func TestWalkNestedSubstInParamExp(t *testing.T) {
+	// ${x:-$(rm -rf /)} — rm inside parameter expansion default must be found.
+	infos, err := ParseAndWalk(`echo ${x:-$(rm -rf /)}`, "bash", nil)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	names := make(map[string]bool)
+	for _, info := range infos {
+		if info.Name != "" {
+			names[info.Name] = true
+		}
+	}
+	if !names["rm"] {
+		t.Errorf("expected 'rm' from ${x:-$(rm)}, got names: %v", names)
+	}
+}
+
+func TestWalkNestedSubstInArithmExp(t *testing.T) {
+	// $(($(gen) + 1)) — gen inside arithmetic expansion must be found.
+	infos, err := ParseAndWalk(`echo $(($(gen) + 1))`, "bash", nil)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	names := make(map[string]bool)
+	for _, info := range infos {
+		if info.Name != "" {
+			names[info.Name] = true
+		}
+	}
+	if !names["gen"] {
+		t.Errorf("expected 'gen' from $(($(gen))), got names: %v", names)
+	}
+}
+
+func TestWalkEnvDashDashCommand(t *testing.T) {
+	// "env -- cmd" — after --, cmd should still be found as the real command.
+	infos, err := ParseAndWalk("env -- cmd", "bash", nil)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if len(infos) == 0 {
+		t.Fatal("expected at least 1 command")
+	}
+	if infos[0].Name != "cmd" {
+		t.Errorf("expected name=cmd after env --, got %q", infos[0].Name)
+	}
+}
+
 func TestWalkUnresolvableNoSubcommand(t *testing.T) {
 	// "$CMD status" — unresolvable, Subcommand should be empty, but all
 	// tokens (including the unresolvable command word) should be in Args.

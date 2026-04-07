@@ -25,8 +25,8 @@ type RedirectInfo struct {
 type CommandContext struct {
 	PipelinePosition int    // 0 = not in pipe, 1 = first stage, 2+ = subsequent stages
 	SubshellDepth    int    // Nesting depth in subshells
-	InSubstitution   bool   // Inside $() or ``
+	InSubstitution   bool   // Inside command substitution ($(), ``) or process substitution (<(), >())
 	InCondition      bool   // Inside if/while test
 	InFunction       string // Name of enclosing function, if any
-	ParentOperator   string // "&&", "||", ";", "|"
+	ParentOperator   string // "&&", "||", ";", "|", "|&"
 }
