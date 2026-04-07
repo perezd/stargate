@@ -46,17 +46,9 @@ func (s *Server) registerRoutes() {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	cfg := s.cfg.Load()
-	uptime := time.Since(s.startTime).Seconds()
-
 	resp := map[string]any{
 		"status":         "ok",
-		"uptime_seconds": uptime,
-		"rules": map[string]int{
-			"red":    len(cfg.Rules.Red),
-			"yellow": len(cfg.Rules.Yellow),
-			"green":  len(cfg.Rules.Green),
-		},
+		"uptime_seconds": time.Since(s.startTime).Seconds(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")

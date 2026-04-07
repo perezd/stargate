@@ -31,11 +31,12 @@ func TestHealthEndpoint(t *testing.T) {
 	if body["status"] != "ok" {
 		t.Errorf("status = %v, want ok", body["status"])
 	}
-	if _, ok := body["version"]; ok {
-		t.Error("health should not expose version")
-	}
 	if _, ok := body["uptime_seconds"]; !ok {
 		t.Error("missing uptime_seconds field")
+	}
+	// Health should only return status and uptime — nothing else.
+	if len(body) != 2 {
+		t.Errorf("health returned %d fields, want exactly 2 (status, uptime_seconds)", len(body))
 	}
 }
 
