@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -28,7 +29,8 @@ func parseDuration(field, value string) error {
 }
 
 // parseDayDuration validates non-negative duration strings that may use "d" suffix for days.
-// Supports Go durations (e.g., "1h") and day-based durations (e.g., "90d").
+// Supports Go durations (e.g., "1h", "0s") and day-based durations (e.g., "90d", "7d").
+// Day-based values must be positive (>= 1d); use "0s" for zero.
 func parseDayDuration(field, value string) error {
 	if value == "" {
 		return nil
@@ -242,13 +244,17 @@ func (cfg *Config) Validate() error {
 	if cfg.Server.Listen == "" {
 		return fmt.Errorf("config: server.listen is required")
 	}
-	host, _, err := net.SplitHostPort(cfg.Server.Listen)
+	host, port, err := net.SplitHostPort(cfg.Server.Listen)
 	if err != nil {
 		return fmt.Errorf("config: server.listen is not a valid host:port: %w", err)
 	}
 	ip := net.ParseIP(host)
 	if ip == nil || !ip.IsLoopback() {
 		return fmt.Errorf("config: server.listen must bind to a loopback IP (127.0.0.0/8 or [::1]); got %q", cfg.Server.Listen)
+	}
+	portNum, err := strconv.Atoi(port)
+	if err != nil || portNum < 0 || portNum > 65535 {
+		return fmt.Errorf("config: server.listen port must be 0-65535; got %q", port)
 	}
 	if err := parseDuration("server.timeout", cfg.Server.Timeout); err != nil {
 		return err

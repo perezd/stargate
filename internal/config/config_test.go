@@ -137,6 +137,16 @@ func TestValidation(t *testing.T) {
 			wantErr: "loopback",
 		},
 		{
+			name:    "invalid server.listen port",
+			toml:    "[server]\nlisten = \"127.0.0.1:abc\"",
+			wantErr: "port",
+		},
+		{
+			name:    "server.listen port out of range",
+			toml:    "[server]\nlisten = \"127.0.0.1:99999\"",
+			wantErr: "port",
+		},
+		{
 			name:    "negative llm.max_tokens",
 			toml:    "[llm]\nmax_tokens = -1",
 			wantErr: "llm.max_tokens",
