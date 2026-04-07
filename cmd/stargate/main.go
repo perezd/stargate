@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,6 +16,19 @@ import (
 	"github.com/perezd/stargate/internal/config"
 	"github.com/perezd/stargate/internal/server"
 )
+
+// isLoopbackAddr returns true if addr binds to a loopback interface only.
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
 
 // Version is the current build version. Override at build time via:
 //
@@ -43,8 +57,7 @@ Global flags:
 // ResolveConfigPath determines the config file path using the following priority:
 //  1. flagPath — value passed via -c/--config flag
 //  2. STARGATE_CONFIG env var
-//  3. $CLAUDE_PROJECT_DIR/.stargate.toml (if CLAUDE_PROJECT_DIR is set)
-//  4. ~/.config/stargate/stargate.toml
+//  3. ~/.config/stargate/stargate.toml
 func ResolveConfigPath(flagPath string) string {
 	if flagPath != "" {
 		return flagPath
@@ -52,10 +65,6 @@ func ResolveConfigPath(flagPath string) string {
 
 	if env := os.Getenv("STARGATE_CONFIG"); env != "" {
 		return env
-	}
-
-	if projectDir := os.Getenv("CLAUDE_PROJECT_DIR"); projectDir != "" {
-		return filepath.Join(projectDir, ".stargate.toml")
 	}
 
 	home, err := os.UserHomeDir()
@@ -82,7 +91,7 @@ var handlers = map[string]subcommandHandler{
 func handleServe(args []string, configPath string, verbose bool) int {
 	// Parse -l/--listen flag from args.
 	var listenOverride string
-	remaining := args[:0]
+	var unknown []string
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
@@ -98,10 +107,13 @@ func handleServe(args []string, configPath string, verbose bool) int {
 		case strings.HasPrefix(arg, "-l="):
 			listenOverride = strings.TrimPrefix(arg, "-l=")
 		default:
-			remaining = append(remaining, arg)
+			unknown = append(unknown, arg)
 		}
 	}
-	_ = remaining
+	if len(unknown) > 0 {
+		fmt.Fprintf(os.Stderr, "serve: unknown argument(s): %s\n", strings.Join(unknown, " "))
+		return 1
+	}
 
 	cfg, err := config.Load(configPath)
 	if err != nil {
@@ -115,6 +127,12 @@ func handleServe(args []string, configPath string, verbose bool) int {
 	}
 	if listenAddr == "" {
 		listenAddr = "127.0.0.1:9099"
+	}
+
+	// Enforce loopback-only binding per security spec.
+	if !isLoopbackAddr(listenAddr) {
+		fmt.Fprintf(os.Stderr, "serve: listen address %q is not loopback; stargate must bind to 127.0.0.1 or [::1]\n", listenAddr)
+		return 1
 	}
 
 	srv := server.New(cfg)

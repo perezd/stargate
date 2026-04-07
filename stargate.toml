@@ -45,7 +45,7 @@ max_command_length = 65536
 # Exact strings (no wildcards) are matched literally.
 
 [scopes]
-github_owners = ["derek", "my-org"]
+github_owners = ["perezd", "my-org"]
 allowed_domains = ["*.example.com", "registry.npmjs.org", "*.googleapis.com"]
 # k8s_contexts = ["dev-*", "staging-*"]
 
@@ -613,8 +613,9 @@ format = "json"
 # Path to log file. Empty string logs to stderr.
 file = ""
 
-# Whether to log the full command string (may contain sensitive data).
-log_commands = true
+# Whether to log the full command string. Disabled by default because
+# commands may contain secrets (tokens in env assignments, URLs with creds).
+log_commands = false
 
 # Whether to log LLM request/response bodies.
 log_llm = false

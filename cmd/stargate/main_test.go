@@ -32,16 +32,21 @@ func TestResolveConfigPath_EnvVarOverridesDefaults(t *testing.T) {
 	}
 }
 
-// TestResolveConfigPath_ClaudeProjectDir verifies that $CLAUDE_PROJECT_DIR/.stargate.toml
-// is used when no flag and no STARGATE_CONFIG are set.
-func TestResolveConfigPath_ClaudeProjectDir(t *testing.T) {
+// TestResolveConfigPath_IgnoresClaudeProjectDir verifies that CLAUDE_PROJECT_DIR
+// is not used for config resolution (removed per PR review — no magic paths).
+func TestResolveConfigPath_IgnoresClaudeProjectDir(t *testing.T) {
 	os.Unsetenv("STARGATE_CONFIG")
 	t.Setenv("CLAUDE_PROJECT_DIR", "/my/project")
 
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("cannot determine home directory")
+	}
+
 	got := ResolveConfigPath("")
-	want := "/my/project/.stargate.toml"
+	want := filepath.Join(home, ".config", "stargate", "stargate.toml")
 	if got != want {
-		t.Errorf("ResolveConfigPath with CLAUDE_PROJECT_DIR: got %q, want %q", got, want)
+		t.Errorf("ResolveConfigPath should fall through to default, got %q, want %q", got, want)
 	}
 }
 

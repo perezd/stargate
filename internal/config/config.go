@@ -4,9 +4,22 @@ package config
 import (
 	"fmt"
 	"os"
+	"regexp"
 
 	"github.com/BurntSushi/toml"
 )
+
+// validateRulePattern checks that a rule's regex pattern compiles.
+func validateRulePattern(pattern string) error {
+	if pattern == "" {
+		return nil
+	}
+	_, err := regexp.Compile(pattern)
+	if err != nil {
+		return fmt.Errorf("invalid pattern %q: %w", pattern, err)
+	}
+	return nil
+}
 
 // Config is the top-level configuration structure for stargate.
 type Config struct {
@@ -189,10 +202,39 @@ func (cfg *Config) Validate() error {
 		return fmt.Errorf("config: corpus.exact_hit_mode must be precedent or auto_decide; got %q", cfg.Corpus.ExactHitMode)
 	}
 
-	// Listen is required only if server block is non-empty (i.e. timeout is set)
-	// but we only enforce it when someone specifies a timeout without a listen addr.
-	// Actual enforcement: if listen is explicitly set to something, it must be non-empty.
-	// (An omitted server block is fine — the server will use its own default.)
+	if cfg.Classifier.MaxASTDepth < 0 {
+		return fmt.Errorf("config: classifier.max_ast_depth must be non-negative; got %d", cfg.Classifier.MaxASTDepth)
+	}
+
+	if cfg.Classifier.MaxCommandLength < 0 {
+		return fmt.Errorf("config: classifier.max_command_length must be non-negative; got %d", cfg.Classifier.MaxCommandLength)
+	}
+
+	if cfg.Corpus.MinSimilarity < 0 || cfg.Corpus.MinSimilarity > 1 {
+		return fmt.Errorf("config: corpus.min_similarity must be between 0.0 and 1.0; got %f", cfg.Corpus.MinSimilarity)
+	}
+
+	validDialects := map[string]bool{"bash": true, "posix": true, "mksh": true}
+	if !validDialects[cfg.Parser.Dialect] {
+		return fmt.Errorf("config: parser.dialect must be bash, posix, or mksh; got %q", cfg.Parser.Dialect)
+	}
+
+	// Validate regex patterns in rules compile.
+	for i, rule := range cfg.Rules.Red {
+		if err := validateRulePattern(rule.Pattern); err != nil {
+			return fmt.Errorf("config: rules.red[%d]: %w", i, err)
+		}
+	}
+	for i, rule := range cfg.Rules.Green {
+		if err := validateRulePattern(rule.Pattern); err != nil {
+			return fmt.Errorf("config: rules.green[%d]: %w", i, err)
+		}
+	}
+	for i, rule := range cfg.Rules.Yellow {
+		if err := validateRulePattern(rule.Pattern); err != nil {
+			return fmt.Errorf("config: rules.yellow[%d]: %w", i, err)
+		}
+	}
 
 	return nil
 }
