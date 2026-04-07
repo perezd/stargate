@@ -11,7 +11,7 @@ type CommandInfo struct {
 	Subcommand string            // First positional argument (after global flag skipping), when present
 	Redirects  []RedirectInfo    // File redirections
 	Env        map[string]string // Inline env vars (e.g., FOO=bar cmd)
-	Context    CommandContext     // Where in the AST tree this lives
+	Context    CommandContext    // Where in the AST tree this lives
 	RawNode    *syntax.CallExpr  // Pointer back to AST node
 }
 

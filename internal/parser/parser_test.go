@@ -848,6 +848,20 @@ func TestWalkEnvPrefixWithFlags(t *testing.T) {
 	}
 }
 
+func TestWalkEnvPrefixWithQuotedAssign(t *testing.T) {
+	// env "FOO=$bar" ls → strips quoted env assignment, finds ls.
+	infos, err := ParseAndWalk(`env "FOO=$bar" ls`, "bash", nil)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if len(infos) == 0 {
+		t.Fatal("expected at least 1 command")
+	}
+	if infos[0].Name != "ls" {
+		t.Errorf("expected name=ls after quoted env assignment, got %q", infos[0].Name)
+	}
+}
+
 func TestWalkGlobalFlagArgsNotInArgs(t *testing.T) {
 	// "git -C /tmp status" — /tmp is consumed by -C, should not appear in Args.
 	infos, err := ParseAndWalk("git -C /tmp status", "bash", nil)

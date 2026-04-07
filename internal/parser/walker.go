@@ -699,12 +699,20 @@ func isShellAssignmentWord(w *syntax.Word) bool {
 	if len(w.Parts) == 0 {
 		return false
 	}
-	// The first part must be a Lit containing NAME= prefix.
-	lit, ok := w.Parts[0].(*syntax.Lit)
-	if !ok {
-		return false
+	// Unquoted or partially quoted: first part is a Lit with NAME= prefix.
+	if lit, ok := w.Parts[0].(*syntax.Lit); ok {
+		return isShellAssignment(lit.Value)
 	}
-	return isShellAssignment(lit.Value)
+	// Fully double-quoted: "FOO=$bar" — the shell removes quotes, passing
+	// FOO=... to the wrapper. Check for NAME= prefix inside the DblQuoted.
+	if len(w.Parts) == 1 {
+		if dq, ok := w.Parts[0].(*syntax.DblQuoted); ok && len(dq.Parts) > 0 {
+			if lit, ok := dq.Parts[0].(*syntax.Lit); ok {
+				return isShellAssignment(lit.Value)
+			}
+		}
+	}
+	return false
 }
 
 // skipWrapperArgs skips flags and special positional tokens for a wrapper command.
