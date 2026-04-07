@@ -397,6 +397,32 @@ func TestWalkBraceExpansion(t *testing.T) {
 	}
 }
 
+func TestWalkQuotedBracesNotBraceExpansion(t *testing.T) {
+	// Quoted braces are NOT brace expansion — they should resolve normally.
+	tests := []struct {
+		name     string
+		cmd      string
+		wantName string
+	}{
+		{"double-quoted", `"{rm,ls}"`, "{rm,ls}"},
+		{"single-quoted", `'{a..z}'`, "{a..z}"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			infos, err := ParseAndWalk(tc.cmd, "bash", nil)
+			if err != nil {
+				t.Fatalf("error: %v", err)
+			}
+			if len(infos) == 0 {
+				t.Fatal("expected at least 1 result")
+			}
+			if infos[0].Name != tc.wantName {
+				t.Errorf("name = %q, want %q (quoted braces should not be evasion)", infos[0].Name, tc.wantName)
+			}
+		})
+	}
+}
+
 func TestWalkCommandSubstitution(t *testing.T) {
 	// $(echo rm) as command name → unresolvable outer command.
 	infos, err := ParseAndWalk("$(echo rm) arg", "bash", nil)

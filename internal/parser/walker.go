@@ -122,16 +122,22 @@ func isUnresolvable(w *syntax.Word) bool {
 
 // isBraceExpansion detects brace expansion patterns in command-name position,
 // in both comma-separated ({a,b,c}) and range ({a..z}, {1..3}) forms.
+// Only unquoted literals are checked — brace expansion doesn't occur inside
+// quotes, so "{rm,ls}" and '{a..z}' are not flagged.
 func isBraceExpansion(w *syntax.Word) bool {
-	lit, ok := wordLiteral(w)
+	// Must be a single bare Lit part (no quoting).
+	if len(w.Parts) != 1 {
+		return false
+	}
+	lit, ok := w.Parts[0].(*syntax.Lit)
 	if !ok {
 		return false
 	}
-	// Detect both comma-separated ({a,b,c}) and range ({a..z}, {1..3}) forms.
-	if !strings.Contains(lit, "{") {
+	val := lit.Value
+	if !strings.Contains(val, "{") {
 		return false
 	}
-	return strings.Contains(lit, ",") || strings.Contains(lit, "..")
+	return strings.Contains(val, ",") || strings.Contains(val, "..")
 }
 
 // walkerState tracks the AST traversal context.
