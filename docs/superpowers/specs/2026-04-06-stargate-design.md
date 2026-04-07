@@ -1642,30 +1642,49 @@ A rule matches if **all** specified fields match. Fields not specified are wildc
 
 2. **`subcommands`**: If present, require `CommandInfo.Subcommand` to match one of the listed subcommands. Case-sensitive exact match. If `CommandInfo.Subcommand == ""` (no subcommand or lookup mode), the rule does not match. An empty `subcommands` list is a wildcard.
 
-3. **`flags`**: If present, require at least one of the listed flags to match any flag in `CommandInfo.Flags`. Flag matching uses short-flag decomposition:
-   - Combined short flags are decomposed into constituent characters: `-rf` → `{r, f}`. A rule flag `-rf` matches CommandInfo flags `["-r", "-f"]` and vice versa — any combined short flag containing all the constituent characters matches.
-   - Long flags (`--recursive`, `--force`) are matched literally. No cross-form matching: rule flag `-rf` does NOT match `["--recursive", "--force"]`. Rule authors must list all forms they want to match.
-   - `--flag=value` forms: the `=value` suffix is stripped before matching, so rule flag `--output` matches CommandInfo flag `--output=file`.
+3. **`flags`**: If present, require at least one of the listed rule flags to match the command's flags. Flag matching uses two-phase logic:
+
+   **Phase 1 — Build the command's flag character set.** For each flag in `CommandInfo.Flags`:
+   - Strip `=value` suffix if present (`--output=file` → `--output`).
+   - If the flag is a combined short flag (starts with `-`, not `--`, and ALL characters after `-` are ASCII letters), decompose into individual characters and add to a character set. E.g., `-rf` adds `{r, f}`, `-la` adds `{l, a}`.
+   - Flags that contain non-letter characters after `-` (e.g., `-o/tmp`, `-2`) are NOT decomposed — they are kept as-is. This prevents misinterpreting `-ofile` (flag `-o` with value `file`) as individual flags.
+   - Long flags (`--recursive`) are kept as-is.
+
+   **Phase 2 — Match each rule flag.** For each rule flag:
+   - Strip `=value` suffix if present.
+   - If the rule flag is a combined short flag (same criteria), decompose into characters and check that ALL constituent characters exist in the command's character set. E.g., rule `-rf` matches if both `r` and `f` are in the set — regardless of whether they came from `-rf`, `-r -f`, or `-fvr`.
+   - Long flags are matched literally against the command's stripped long flags.
+   - No cross-form matching: rule flag `-rf` does NOT match `["--recursive", "--force"]`. Rule authors must list all flag forms they want to match.
+
+   A rule flag field matches if ANY of the listed rule flags matches via the above logic.
 
 4. **`args`**: If present, require at least one argument in `CommandInfo.Args` to match any listed glob pattern. Glob matching uses `doublestar.Match` (not `filepath.Match`) to support `**` for recursive path patterns. Examples: `/etc/*` matches `/etc/passwd` but not `/etc/ssh/config`; `**/node_modules` matches `./src/node_modules`.
 
-5. **`scope`**: If present, require at least one argument in `CommandInfo.Args` to be a path under the scope directory. Scope matching uses path-prefix semantics with boundary enforcement:
-   - At config load time, scopes that don't end with `/` (except `/` itself) have `/` appended. E.g., `scope = "/etc"` becomes `"/etc/"`.
-   - Matching is `strings.HasPrefix(arg, normalizedScope)`. This ensures `/etc` matches `/etc/passwd` but not `/etcetera/file`.
-   - `scope = "/"` matches all paths (system-wide).
+5. **`scope`**: If present, require at least one argument in `CommandInfo.Args` to be a path under the scope directory. Scope matching uses path-prefix semantics with boundary enforcement and canonicalization:
+   - At config load time, scopes that don't end with `/` (except `/` itself) have `/` appended. E.g., `scope = "/etc"` becomes `"/etc/"`. Scopes already ending with `/` are not double-slashed.
+   - Before matching, each argument is canonicalized with `filepath.Clean` to resolve `..` segments. E.g., `/etc/../var/secret` becomes `/var/secret` and will NOT match `scope = "/etc/"`.
+   - Only absolute path arguments (starting with `/`) are considered for scope matching. Relative paths, `~`, and `$HOME` do not match scope rules — they fall through to YELLOW via the default decision. This is intentional: scope rules express trust boundaries over absolute filesystem paths.
+   - Matching is `strings.HasPrefix(filepath.Clean(arg), normalizedScope)`.
+   - `scope = "/"` matches all absolute paths (system-wide).
 
 6. **`context`**: If present, require `CommandContext` to match. Valid context values:
    - `"any"` or `""` — wildcard (default, matches everything)
    - `"pipeline_sink"` — requires `PipelinePosition >= 2`
+   - `"pipeline_source"` — requires `PipelinePosition == 1`
+   - `"pipeline"` — requires `PipelinePosition >= 1` (any pipeline position)
    - `"subshell"` — requires `SubshellDepth > 0`
    - `"substitution"` — requires `InSubstitution == true`
    - `"condition"` — requires `InCondition == true`
    - `"function"` — requires `InFunction != ""`
+   - `"redirect"` — requires the command to have at least one redirect in `Redirects`
+   - `"background"` — reserved for future use (background `&` detection)
    Config validation rejects unknown context values.
 
 7. **`resolve`**: If present, invoke the named resolver to extract a target value from the command, then check if the value matches a pattern in the named scope. Resolver returning "unresolvable" means the rule does not match (falls through). See §4 Scopes and Resolvers.
 
-8. **`pattern`**: Regex applied to the full raw command string (not per-CommandInfo). Used for constructs that resist AST decomposition (e.g., `curl ... | bash` spans two AST nodes). If a rule has both AST fields (command, flags, etc.) and a pattern, ALL must match.
+8. **`pattern`**: Regex applied to the full raw command string (not per-CommandInfo). Used as a **fallback** for constructs that resist AST decomposition (e.g., `curl ... | bash` spans two AST nodes). If a rule has both AST fields (command, flags, etc.) and a pattern, ALL must match.
+
+   **Important:** Pattern rules operate on the raw string BEFORE AST parsing, so they are susceptible to quoting evasion (e.g., `"bash"` or `ba""sh`). Pattern-only RED rules should be complemented by equivalent AST-based rules where possible. The pattern is a defense-in-depth layer, not the primary classification mechanism. Regex patterns are compiled once at config load time and reused — never recompiled per evaluation.
 
 #### 7.3.2 Pipeline Evaluation Order
 
@@ -1688,6 +1707,13 @@ The evaluation result carries:
 - `Rule` — the matched rule's level, reason, and index (nil for default)
 - `LLMReview` — whether to escalate to LLM (from YELLOW rule's `llm_review` field)
 - `MatchedCommand` — which CommandInfo triggered the match (for RED, the specific dangerous command)
+
+#### 7.3.4 Implementation Notes
+
+- **`--flag=value` stripping** is performed at match time in the rule engine, not in the parser's `CommandInfo.Flags`. This preserves the original flag form in `CommandInfo` for corpus signatures and telemetry, while allowing rule matching to be value-agnostic.
+- **Regex compilation** happens once at config load time (and on hot-reload). Compiled `*regexp.Regexp` objects are stored on the rule struct. They are never recompiled per `/classify` call.
+- **Performance** is O(rules × commands) per tier. For typical configs (tens of rules, single-digit commands), this is sub-microsecond. Config validation emits a warning if total rule count exceeds 200, at which point a command-name index optimization should be considered.
+- **`doublestar.Match`** is used for `args` glob patterns. The `doublestar` library is pure Go with no CGO dependency. Patterns are validated at config load time.
 
 ### 7.4 LLM Review Protocol
 
