@@ -312,6 +312,7 @@ func DefaultWrappers() []WrapperConfig {
 		{Command: "time", Flags: map[string]int{"-p": 0}},
 		{
 			Command: "command",
+			Flags:   map[string]int{"-p": 0},
 			NoStrip: []string{"-v", "-V"},
 		},
 		{Command: "builtin"},

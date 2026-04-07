@@ -1028,7 +1028,45 @@ func TestWalkWrapperNoInnerCommand(t *testing.T) {
 			if infos[0].Name != tt.wantName {
 				t.Errorf("expected name=%q, got %q", tt.wantName, infos[0].Name)
 			}
+			// Wrapper's own flags/args should be preserved in Flags/Args.
+			if len(infos[0].Flags) == 0 && len(infos[0].Args) == 0 {
+				t.Error("expected wrapper's flags/args to be preserved, got empty Flags and Args")
+			}
 		})
+	}
+}
+
+func TestWalkWrapperUnknownFlagPreservesArgs(t *testing.T) {
+	// "sudo --unknown-flag value rm" — unknown flag stops stripping,
+	// all tokens after "sudo" should be in Flags/Args.
+	infos, err := ParseAndWalk("sudo --unknown-flag value rm", "bash", nil)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if len(infos) == 0 {
+		t.Fatal("expected at least 1 command")
+	}
+	if infos[0].Name != "sudo" {
+		t.Errorf("expected name=sudo, got %q", infos[0].Name)
+	}
+	// --unknown-flag, value, rm should all be in Flags/Args
+	totalTokens := len(infos[0].Flags) + len(infos[0].Args)
+	if totalTokens < 3 {
+		t.Errorf("expected at least 3 tokens in Flags+Args, got flags=%v args=%v", infos[0].Flags, infos[0].Args)
+	}
+}
+
+func TestWalkCommandDashP(t *testing.T) {
+	// "command -p ls" — -p is a known flag, should strip to ls.
+	infos, err := ParseAndWalk("command -p ls", "bash", nil)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if len(infos) == 0 {
+		t.Fatal("expected at least 1 command")
+	}
+	if infos[0].Name != "ls" {
+		t.Errorf("expected name=ls after command -p, got %q", infos[0].Name)
 	}
 }
 

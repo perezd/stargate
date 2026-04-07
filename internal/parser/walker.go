@@ -657,16 +657,17 @@ func resolveCommand(args []*syntax.Word, depth int, wrappers map[string]WrapperD
 
 	// If stripping consumed everything, the wrapper itself is the command
 	// (e.g., "sudo -v", "env FOO=bar" with no inner command).
+	// Return original rest so the wrapper's flags/args are preserved for classification.
 	if len(rest) == 0 {
-		return lit, nil, false
+		return lit, args[1:], false
 	}
 
 	// If the remaining args still start with a flag token, skipWrapperArgs
 	// stopped on an unknown flag. We cannot safely strip the wrapper because
 	// we don't know how many arguments the unknown flag consumes. Return the
-	// wrapper name (fail-closed — the command falls to default classification).
+	// wrapper name with all remaining args for classification.
 	if firstLit, ok := wordLiteral(rest[0]); ok && strings.HasPrefix(firstLit, "-") {
-		return lit, nil, false
+		return lit, args[1:], false
 	}
 
 	return resolveCommand(rest, depth+1, wrappers)
