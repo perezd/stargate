@@ -353,6 +353,29 @@ git commit -m "feat(config): add config validate subcommand"
 
 Goal: Parse bash commands into ASTs and extract structured `CommandInfo` from every command invocation.
 
+> **M1 Retrospective (post-implementation):** The original plan treated the walker as
+> a straightforward AST traversal. PR review revealed it's the most complex component
+> — 84 review threads across 20 rounds produced 29 fix commits. Three areas were
+> underspecified and drove most of the review tail:
+>
+> 1. **Redirect ownership** — 6 rounds. The plan said "extract redirects" but didn't
+>    specify which command owns a redirect on pipelines, compound statements, or
+>    nested structures. See spec §7.2.3 for the rules that emerged.
+>
+> 2. **AST nesting paths** — commands can hide in 10+ locations (ParamExp defaults,
+>    ArithmExp, ArithmCmd, LetClause, CStyleLoop, CaseClause patterns, redirect
+>    operands, DblQuoted, ProcSubst). The plan only tested `$()` and subshells.
+>    See spec §7.2.2 for the complete list.
+>
+> 3. **Prefix stripping edge cases** — unknown flags, wrapper exhaustion, non-literal
+>    values, `command -v` lookup mode, env-assign validation (POSIX identifiers,
+>    quoted values). The plan treated this as a simple map lookup. See spec §7.2.4.
+>
+> **For future milestones:** When a component touches shell semantics or security
+> classification, add a design verification task that maps every possible input
+> path before writing implementation code. Test matrices should enumerate edge
+> cases, not just happy paths.
+
 ### Task 1.1: Core types (CommandInfo, CommandContext)
 
 **Files:**

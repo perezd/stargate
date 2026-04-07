@@ -305,6 +305,34 @@ allowed_domains = ["*.example.com", "registry.npmjs.org", "*.googleapis.com"]
 # k8s_contexts = ["dev-*", "staging-*"]
 
 # ---------------------------------------------------------------------------
+# Wrapper Commands — prefix stripping metadata
+# ---------------------------------------------------------------------------
+# Wrappers are commands that wrap another command (e.g., sudo, env, timeout).
+# The walker strips these and classifies the inner command. Each wrapper
+# defines its known flags and their argument counts.
+#
+# Flags map flag names to the number of extra arguments consumed (0 = boolean).
+# Only known flags are skipped — unknown flags stop stripping (fail-closed).
+# no_strip lists flags that indicate non-execution (e.g., command -v).
+# consume_env_assigns = true for env-like wrappers that consume VAR=val tokens.
+# consume_first_positional = true for timeout-like wrappers whose first
+# positional is a duration, not the inner command.
+#
+# If omitted, built-in defaults are used (sudo, doas, env, nice, timeout,
+# watch, strace, nohup, time, command, builtin). Setting [[wrappers]]
+# explicitly replaces all defaults; use wrappers = [] for no wrappers.
+
+# ---------------------------------------------------------------------------
+# Command Global Flags — subcommand extraction metadata
+# ---------------------------------------------------------------------------
+# Some commands have global flags that precede the subcommand (e.g., git -C).
+# These are skipped when extracting the subcommand. Each entry maps flag
+# names to the number of extra arguments consumed.
+#
+# If omitted, built-in defaults are used (git, docker, gh, kubectl).
+# Setting [[commands]] explicitly replaces all defaults.
+
+# ---------------------------------------------------------------------------
 # Rule Definitions
 # ---------------------------------------------------------------------------
 # Rules are evaluated in priority order: red > green > yellow.
@@ -1503,31 +1531,106 @@ type CommandInfo struct {
     Name        string            // Resolved command name
     Args        []string          // Positional arguments
     Flags       []string          // Flags (short and long)
-    Subcommand  string            // First argument if it looks like a subcommand
-    Redirects   []RedirectInfo    // File redirections
+    Subcommand  string            // First positional argument (after global flag skipping), when present
+    Redirects   []RedirectInfo    // File redirections (RedirectInfo.File = target operand: filename, fd, or dynamic word)
     Env         map[string]string // Inline env vars (FOO=bar cmd)
     Context     CommandContext     // Where in the AST tree this lives
     RawNode     *syntax.CallExpr  // Pointer back to AST node
 }
 
 type CommandContext struct {
-    PipelinePosition int    // 0 = not in pipe, 1 = source, 2+ = sink
+    PipelinePosition int    // 0 = not in pipe, 1 = first stage, 2+ = subsequent stages
     SubshellDepth    int    // Nesting depth in subshells
-    InSubstitution   bool   // Inside $() or ``
+    InSubstitution   bool   // Inside command substitution ($(), ``) or process substitution (<(), >())
     InCondition      bool   // Inside if/while test
     InFunction       string // Name of enclosing function, if any
-    ParentOperator   string // "&&", "||", ";", "|"
+    ParentOperator   string // "&&", "||", ";", "|", "|&"
 }
 ```
 
-Key behaviors:
+#### 7.2.1 AST Node Coverage Matrix
+
+The walker handles every `syntax.*` node type that can contain executable commands:
+
+| AST Node | Walker Behavior |
+|----------|----------------|
+| `CallExpr` | Extract CommandInfo: command name, flags, args, subcommand, env vars, redirects |
+| `BinaryCmd` (Pipe/PipeAll) | Track pipeline position (1-indexed), distinguish `\|` from `\|&` in ParentOperator |
+| `BinaryCmd` (&&/\|\|) | Walk both sides, set ParentOperator |
+| `Subshell` | Increment SubshellDepth, walk inner statements |
+| `Block` (`{ }`) | Walk inner statements |
+| `IfClause` | Walk condition (set InCondition=true), walk then/else bodies |
+| `WhileClause` | Walk condition (set InCondition=true), walk body |
+| `ForClause` (WordIter) | Walk iteration list words for substitutions, walk body |
+| `ForClause` (CStyleLoop) | Walk Init/Cond/Post arithmetic expressions, walk body |
+| `CaseClause` | Walk test word and pattern words for substitutions, walk each item's body |
+| `FuncDecl` | Track function name (InFunction), walk body |
+| `TimeClause` | Walk inner statement (bash `time` is a clause, not a command) |
+| `CoprocClause` | Walk inner statement |
+| `ArithmCmd` (`(( ))`) | Walk expression for nested substitutions |
+| `LetClause` | Walk each expression for nested substitutions |
+| `DeclClause`, `TestClause` | No sub-commands to extract |
+
+#### 7.2.2 Command Substitution Nesting Paths
+
+Commands can hide inside substitutions at many points in the AST. The walker must find command substitutions in ALL of the following locations:
+
+- Top-level `$()` and `` ` `` in arguments
+- Inside `DblQuoted` strings
+- Inside `ProcSubst` (`<()`, `>()`)
+- Inside `ParamExp` default/replacement/slice/index: `${x:-$(cmd)}`, `${x/pat/$(cmd)}`, `${x:$(off):$(len)}`, `${a[$(idx)]}`
+- Inside `ArithmExp`: `$(($(cmd) + 1))`
+- Inside `ArithmCmd`/`LetClause` expressions
+- Inside `ForClause` CStyleLoop Init/Cond/Post
+- Inside `CaseClause` patterns
+- Inside redirect operands: `> "$(cmd)"`, heredocs
+
+#### 7.2.3 Redirect Ownership Rules
+
+Redirects on a `Stmt` must be attributed to the correct commands. The rules are explicit:
+
+| Statement Type | Redirect Attachment Rule |
+|---------------|------------------------|
+| `CallExpr` | Attach to the direct command (verify RawNode match to avoid assignment-only stmts) |
+| `BinaryCmd` (pipeline), simple last stage | Find the last stage's CallExpr by RawNode match |
+| `BinaryCmd` (pipeline), compound last stage | Use AST position spans (Pos/End offsets) to find all direct commands within the last stage |
+| Compound (Subshell, Block, If, While, For) | Propagate to ALL direct (non-substitution) commands inside |
+| Redirect operands themselves | Walk for nested substitutions (separate from attachment) |
+
+Key invariant: **commands inside `$()` substitutions never receive redirects from the enclosing statement.** Substitutions run in their own execution context.
+
+#### 7.2.4 Prefix Stripping Design
+
+- **Config-driven**: Wrapper commands and their flags are defined in `stargate.toml` `[[wrappers]]` entries, not hardcoded. Built-in defaults ship for sudo, doas, env, nice, timeout, watch, strace, nohup, time, command, builtin.
+- **Recursive up to maxWrapperDepth (16)**: Each stripping iteration resolves one wrapper layer.
+- **Known flags only (fail-closed)**: Only flags explicitly listed in the wrapper's Flags map are skipped. Unknown flags stop stripping — the wrapper name is returned as the command (falls to default classification).
+- **NoStrip flags**: Some wrappers have flags that indicate non-execution (e.g., `command -v` is a lookup). When the first post-wrapper token matches a NoStrip flag, the wrapper is not stripped and enters lookup mode (Subcommand is not populated).
+- **Special consumption modes**: `ConsumeEnvAssigns` (for `env`: skips VAR=val tokens, validated as POSIX shell identifiers including quoted forms), `ConsumeFirstPositional` (for `timeout`: skips the duration argument). Both handle non-literal values.
+- **Exhaustion**: If stripping consumes all args, the wrapper itself is returned as the command name with its flags/args preserved.
+
+#### 7.2.5 Subcommand Extraction
+
+- First positional argument after the command name, skipping known global flags per `[[commands]]` config.
+- `--` terminates options: args after `--` are never subcommands.
+- Dynamic (non-literal) words in subcommand position consume the slot but don't populate Subcommand (prevents later positionals from being promoted).
+- Lookup mode (e.g., `command -v foo`): Subcommand is not populated.
+
+#### 7.2.6 Context Inheritance Rules
+
+- `PipelinePosition`: NOT inherited by commands inside `$()`, `<()`, `>()` substitutions (they run in their own execution context).
+- `SubshellDepth`: Incremented for `Subshell` nodes.
+- `InSubstitution`: Set for `CmdSubst` AND `ProcSubst`.
+- `InCondition`: Set for `IfClause.Cond` and `WhileClause.Cond` lists.
+- `InFunction`: Set to the function name for `FuncDecl` body.
+- `ParentOperator`: Set to `"&&"`, `"||"`, `";"`, `"|"`, or `"|&"`.
+
+Key behaviors (summary):
 
 - **Pipe sinks** (`cmd | cmd2`): `cmd2` gets `PipelinePosition: 2`. Some RED rules only apply at pipe sinks (e.g., `base64` is fine standalone, dangerous as a pipe sink after `curl`).
 - **Command substitution** (`$(cmd)`): Commands inside substitutions are walked recursively. A `rm` hidden inside `$(rm -rf /)` is caught.
 - **Variable expansion**: When the command name is a variable (`$CMD arg`), the command is flagged as `unresolvable_expansion` and classified per config.
-- **Brace expansion**: `mvdan.cc/sh/v3` does NOT expand brace expressions — `{rm,-rf,/}` produces a single literal word. The walker detects brace patterns (`{...}`) in command-name position and routes them to `unresolvable_expansion` -> YELLOW. Similarly, `ParamExp`, `CmdSubst`, and `ArithmExp` in command-name position all route to `unresolvable_expansion`.
+- **Brace expansion**: `mvdan.cc/sh/v3` does NOT expand brace expressions — `{rm,-rf,/}` produces a single literal word. The walker detects brace patterns (`{...}`) in command-name position and routes them to `unresolvable_expansion` -> YELLOW. Similarly, `ParamExp`, `CmdSubst`, and `ArithmExp` in command-name position all route to `unresolvable_expansion`. Only unquoted bare `Lit` words trigger brace detection.
 - **Function definitions**: Functions are analyzed but not executed — the body is walked for dangerous commands.
-- **Prefix stripping**: The walker strips the following command prefixes and classifies the inner command: `sudo`, `doas`, `nice`, `nohup`, `time`, `strace`, `watch`, `command`, `builtin`, `env`, `timeout`. For example, `sudo rm -rf /` is classified as `rm -rf /`. Nested prefixes are stripped recursively (`sudo env rm -rf /` -> `rm -rf /`). Prefix stripping is applied up to a maximum depth of 16. Commands exceeding this depth are routed to `unresolvable_expansion` and classified per the configured default (YELLOW).
 
 ### 7.3 Rule Matching Logic
 
@@ -1948,6 +2051,14 @@ This means a single trace in Grafana shows the complete lifecycle: classificatio
 | Malicious `.git/config` | Scopes are in `stargate.toml` (outside repo); `.git/config` is a claim to verify, not a trust anchor |
 | Prompt injection adding remotes | Resolver validates inferred repo against scope allowlist |
 | Traversal in `gh api` paths | Resolver rejects `..`, `%`, `//` in API paths |
+| Nested substitution in ParamExp (`${x:-$(rm)}`) | Walker recurses into ParamExp.Exp, Repl, Slice, Index |
+| Nested substitution in ArithmExp (`$(($(cmd)))`) | Walker recurses via walkArithmExpr (covers BinaryArithm, UnaryArithm, ParenArithm, FlagsArithm) |
+| Commands in ArithmCmd/LetClause (`(( $(cmd) ))`) | Walker walks ArithmCmd.X and LetClause.Exprs |
+| Commands in redirect operands (`> "$(cmd)"`) | Redirect words and heredocs walked for substitutions |
+| Commands in for-loop headers (`for x in $(cmd)`) | WordIter items and CStyleLoop Init/Cond/Post walked |
+| Commands in case patterns (`case $x in $(pat))`) | Pattern words walked for substitutions |
+| Quoted brace expansion (`"{rm,ls}"`) | Only unquoted bare Lit words trigger brace detection |
+| Wrapper flag evasion (`sudo --unknown rm`) | Unknown flags stop stripping (fail-closed) |
 
 ### 10.2 Fail-Closed Design
 

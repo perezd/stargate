@@ -68,11 +68,39 @@ type Config struct {
 	Classifier ClassifierConfig          `toml:"classifier"`
 	Scopes     map[string][]string       `toml:"scopes"`
 	Rules      RulesConfig               `toml:"rules"`
+	Wrappers   []WrapperConfig           `toml:"wrappers"`
+	Commands   []CommandFlagsConfig      `toml:"commands"`
 	LLM        LLMConfig                 `toml:"llm"`
 	Scrubbing  ScrubbingConfig           `toml:"scrubbing"`
 	Corpus     CorpusConfig              `toml:"corpus"`
 	Telemetry  TelemetryConfig           `toml:"telemetry"`
 	Log        LogConfig                 `toml:"log"`
+}
+
+// WrapperConfig defines a prefix command that wraps another command.
+// The walker strips these and classifies the inner command.
+// Flags maps flag names to the number of arguments they consume (0 = no arg).
+type WrapperConfig struct {
+	Command string         `toml:"command"`
+	Flags   map[string]int `toml:"flags"`
+	// NoStrip lists flags that indicate the wrapper is NOT executing a command
+	// (e.g., "command -v" is a lookup, not execution). When the first
+	// post-wrapper token is one of these flags, the wrapper is not stripped.
+	NoStrip []string `toml:"no_strip"`
+	// ConsumeEnvAssigns causes the walker to also skip VAR=val tokens that
+	// appear before the real command (e.g., env FOO=bar cmd).
+	ConsumeEnvAssigns bool `toml:"consume_env_assigns"`
+	// ConsumeFirstPositional causes the walker to skip the first non-flag
+	// positional argument (e.g., timeout's duration argument).
+	ConsumeFirstPositional bool `toml:"consume_first_positional"`
+}
+
+// CommandFlagsConfig defines global flags for a command that should be skipped
+// when extracting the subcommand. E.g., git -C <path> status — -C and its arg
+// are skipped to find "status" as the subcommand.
+type CommandFlagsConfig struct {
+	Command string         `toml:"command"`
+	Flags   map[string]int `toml:"flags"`
 }
 
 // ServerConfig holds HTTP server settings.
@@ -232,8 +260,92 @@ func applyDefaults(cfg *Config) {
 	if cfg.Corpus.Path == "" {
 		cfg.Corpus.Path = "~/.local/share/stargate/precedents.db"
 	}
+	if cfg.Wrappers == nil {
+		cfg.Wrappers = DefaultWrappers()
+	}
+	if cfg.Commands == nil {
+		cfg.Commands = DefaultCommandFlags()
+	}
 	if cfg.Corpus.ExactHitMode == "" {
 		cfg.Corpus.ExactHitMode = "precedent"
+	}
+}
+
+// DefaultWrappers returns built-in wrapper command definitions.
+// Operators can override these entirely by defining [[wrappers]] in their config.
+func DefaultWrappers() []WrapperConfig {
+	return []WrapperConfig{
+		{
+			Command: "sudo",
+			Flags: map[string]int{
+				"-u": 1, "-g": 1, "-c": 1, "-D": 1,
+				"-r": 1, "-t": 1, "-T": 1, "-U": 1,
+				"-h": 0, "-i": 0, "-s": 0, "-l": 0, "-v": 0,
+				"-k": 0, "-K": 0, "-n": 0, "-b": 0,
+				"-e": 0, "-A": 0, "-S": 0, "-H": 0, "-P": 0,
+			},
+		},
+		{Command: "doas", Flags: map[string]int{"-u": 1, "-s": 0, "-n": 0}},
+		{
+			Command:           "env",
+			Flags:             map[string]int{"-i": 0, "-u": 1, "-S": 1},
+			ConsumeEnvAssigns: true,
+		},
+		{Command: "nice", Flags: map[string]int{"-n": 1}},
+		{
+			Command:                "timeout",
+			Flags:                  map[string]int{"-k": 1, "--kill-after": 1, "-s": 1, "--signal": 1},
+			ConsumeFirstPositional: true,
+		},
+		{
+			Command: "watch",
+			Flags:   map[string]int{"-n": 1, "--interval": 1, "-d": 0, "--differences": 0},
+		},
+		{
+			Command: "strace",
+			Flags: map[string]int{
+				"-e": 1, "-o": 1, "-p": 1, "-s": 1, "-P": 1,
+				"-I": 1, "-b": 1, "-a": 1, "-X": 1,
+			},
+		},
+		{Command: "nohup"},
+		{Command: "time", Flags: map[string]int{"-p": 0}},
+		{
+			Command: "command",
+			Flags:   map[string]int{"-p": 0},
+			NoStrip: []string{"-v", "-V"},
+		},
+		{Command: "builtin"},
+	}
+}
+
+// DefaultCommandFlags returns built-in global flag definitions for subcommand extraction.
+func DefaultCommandFlags() []CommandFlagsConfig {
+	return []CommandFlagsConfig{
+		{
+			Command: "git",
+			Flags: map[string]int{
+				"-C": 1, "--git-dir": 1, "--work-tree": 1,
+				"--no-pager": 0, "--bare": 0, "--no-replace-objects": 0,
+			},
+		},
+		{
+			Command: "docker",
+			Flags: map[string]int{
+				"--context": 1, "-c": 1, "--host": 1, "-H": 1,
+				"--log-level": 1, "-l": 1, "--tls": 0, "--tlsverify": 0,
+				"--config": 1, "-D": 0, "--debug": 0,
+			},
+		},
+		{Command: "gh", Flags: map[string]int{"--repo": 1, "-R": 1}},
+		{
+			Command: "kubectl",
+			Flags: map[string]int{
+				"--context": 1, "--namespace": 1, "-n": 1,
+				"--cluster": 1, "--user": 1, "--kubeconfig": 1,
+				"-s": 1, "--server": 1,
+			},
+		},
 	}
 }
 
@@ -344,6 +456,40 @@ func (cfg *Config) Validate() error {
 	for i, rule := range cfg.Rules.Yellow {
 		if err := validateRulePattern(rule.Pattern); err != nil {
 			return fmt.Errorf("config: rules.yellow[%d]: %w", i, err)
+		}
+	}
+
+	// --- Wrappers ---
+	wrappersSeen := make(map[string]bool)
+	for i, w := range cfg.Wrappers {
+		if w.Command == "" {
+			return fmt.Errorf("config: wrappers[%d]: command must not be empty", i)
+		}
+		if wrappersSeen[w.Command] {
+			return fmt.Errorf("config: wrappers[%d]: duplicate command %q", i, w.Command)
+		}
+		wrappersSeen[w.Command] = true
+		for flag, argc := range w.Flags {
+			if argc < 0 {
+				return fmt.Errorf("config: wrappers[%d] (%s): flag %q arg count must be non-negative; got %d", i, w.Command, flag, argc)
+			}
+		}
+	}
+
+	// --- Commands (global flags) ---
+	commandsSeen := make(map[string]bool)
+	for i, c := range cfg.Commands {
+		if c.Command == "" {
+			return fmt.Errorf("config: commands[%d]: command must not be empty", i)
+		}
+		if commandsSeen[c.Command] {
+			return fmt.Errorf("config: commands[%d]: duplicate command %q", i, c.Command)
+		}
+		commandsSeen[c.Command] = true
+		for flag, argc := range c.Flags {
+			if argc < 0 {
+				return fmt.Errorf("config: commands[%d] (%s): flag %q arg count must be non-negative; got %d", i, c.Command, flag, argc)
+			}
 		}
 	}
 
