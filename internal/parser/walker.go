@@ -3,6 +3,7 @@ package parser
 import (
 	"bytes"
 	"strings"
+	"sync"
 
 	"github.com/perezd/stargate/internal/config"
 	"github.com/perezd/stargate/internal/rules"
@@ -61,12 +62,17 @@ func DefaultWalkerConfig() *WalkerConfig {
 	return NewWalkerConfig(config.DefaultWrappers(), config.DefaultCommandFlags())
 }
 
+// printerPool reuses syntax.Printer instances across concurrent calls.
+var printerPool = sync.Pool{
+	New: func() any { return syntax.NewPrinter() },
+}
+
 // wordToString converts a syntax.Word to its string representation.
-// Creates a new printer per call to be safe for concurrent use.
 func wordToString(w *syntax.Word) string {
 	var buf bytes.Buffer
-	p := syntax.NewPrinter()
+	p := printerPool.Get().(*syntax.Printer)
 	_ = p.Print(&buf, w)
+	printerPool.Put(p)
 	return buf.String()
 }
 
