@@ -89,7 +89,10 @@ func TestHandlers_UnknownSubcommandNotRegistered(t *testing.T) {
 // TestHandlers_UnimplementedReturnNonZero verifies not-yet-implemented handlers
 // return non-zero exit codes.
 func TestHandlers_UnimplementedReturnNonZero(t *testing.T) {
-	devNull, _ := os.Open(os.DevNull)
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("failed to open %q: %v", os.DevNull, err)
+	}
 	origStderr := os.Stderr
 	os.Stderr = devNull
 	defer func() {
@@ -137,7 +140,10 @@ func TestConfigValidate_InvalidConfig(t *testing.T) {
 default_decision = "invalid"
 `)
 
-	devNull, _ := os.Open(os.DevNull)
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("failed to open %q: %v", os.DevNull, err)
+	}
 	origStderr := os.Stderr
 	os.Stderr = devNull
 	defer func() { os.Stderr = origStderr; devNull.Close() }()
@@ -149,7 +155,10 @@ default_decision = "invalid"
 }
 
 func TestConfigValidate_MissingFile(t *testing.T) {
-	devNull, _ := os.Open(os.DevNull)
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("failed to open %q: %v", os.DevNull, err)
+	}
 	origStderr := os.Stderr
 	os.Stderr = devNull
 	defer func() { os.Stderr = origStderr; devNull.Close() }()

@@ -115,6 +115,11 @@ func handleServe(args []string, configPath string, verbose bool) int {
 		return 1
 	}
 
+	if configPath == "" {
+		fmt.Fprintln(os.Stderr, "serve: no config file found; pass --config or set STARGATE_CONFIG")
+		return 1
+	}
+
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "serve: failed to load config: %v\n", err)
@@ -207,7 +212,12 @@ func handleConfig(args []string, configPath string, verbose bool) int {
 	}
 }
 
-func handleConfigValidate(configPath string, verbose bool) int {
+func handleConfigValidate(configPath string, _ bool) int {
+	if configPath == "" {
+		fmt.Fprintln(os.Stderr, "error: no config file found; pass --config or set STARGATE_CONFIG")
+		return 1
+	}
+
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

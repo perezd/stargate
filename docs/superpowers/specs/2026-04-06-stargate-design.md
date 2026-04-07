@@ -1407,12 +1407,8 @@ All exit-2 paths are fail-closed.
 ```json
 {
   "status": "ok",
-  "version": "0.2.0",
   "uptime_seconds": 3600,
-  "config_loaded_at": "2026-04-06T10:00:00Z",
-  "rules": { "red": 14, "yellow": 10, "green": 14 },
-  "scopes": { "github_owners": 2, "allowed_domains": 2 },
-  "telemetry": { "enabled": true, "endpoint": "https://otlp-gateway-..." }
+  "rules": { "red": 14, "yellow": 10, "green": 14 }
 }
 ```
 
@@ -1818,8 +1814,7 @@ All subcommands resolve the config file in this order:
 
 1. `--config` / `-c` flag
 2. `STARGATE_CONFIG` environment variable
-3. `$CLAUDE_PROJECT_DIR/.stargate.toml` (project-local)
-4. `~/.config/stargate/stargate.toml` (user default)
+3. `~/.config/stargate/stargate.toml` (user default)
 
 ---
 
