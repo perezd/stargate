@@ -199,6 +199,9 @@ func TestClassifyUnparseable(t *testing.T) {
 	if !strings.Contains(resp.Reason, "parse error") {
 		t.Errorf("reason = %q, want it to mention parse error", resp.Reason)
 	}
+	if resp.AST != nil {
+		t.Error("ast should be null on parse error per spec")
+	}
 }
 
 func TestClassifyTraceID(t *testing.T) {

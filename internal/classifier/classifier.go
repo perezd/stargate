@@ -74,8 +74,9 @@ type ASTSummary struct {
 
 // CommandSummary is a compact representation of a single CommandInfo for the response.
 type CommandSummary struct {
-	Name       string `json:"name"`
-	Subcommand string `json:"subcommand,omitempty"`
+	Name       string   `json:"name"`
+	Context    string   `json:"context"`
+	Subcommand string   `json:"subcommand,omitempty"`
 	Flags      []string `json:"flags,omitempty"`
 	Args       []string `json:"args,omitempty"`
 }
@@ -118,8 +119,8 @@ func (c *Classifier) Classify(req ClassifyRequest) *ClassifyResponse {
 		StargateTrID: traceID,
 		Context:      req.Context,
 		Timing:       &Timing{},
-		AST:          &ASTSummary{},
-		Version:      version,
+		// AST is nil until parsing succeeds (spec: ast is null on parse failure).
+		Version: version,
 	}
 
 	finalize := func() *ClassifyResponse {
@@ -224,12 +225,34 @@ func buildASTSummary(cmds []rules.CommandInfo) *ASTSummary {
 
 		s.Commands = append(s.Commands, CommandSummary{
 			Name:       cmd.Name,
+			Context:    contextString(cmd),
 			Subcommand: cmd.Subcommand,
 			Flags:      cmd.Flags,
 			Args:       cmd.Args,
 		})
 	}
 	return s
+}
+
+// contextString derives a human-readable context label from a CommandInfo,
+// matching the spec's ast.commands[*].context enum.
+func contextString(cmd *rules.CommandInfo) string {
+	switch {
+	case cmd.Context.InSubstitution:
+		return "substitution"
+	case cmd.Context.InCondition:
+		return "condition"
+	case cmd.Context.InFunction != "":
+		return "function"
+	case cmd.Context.SubshellDepth > 0:
+		return "subshell"
+	case cmd.Context.PipelinePosition == 1:
+		return "pipeline_source"
+	case cmd.Context.PipelinePosition >= 2:
+		return "pipeline_sink"
+	default:
+		return "top_level"
+	}
 }
 
 
