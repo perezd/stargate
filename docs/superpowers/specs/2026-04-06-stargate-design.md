@@ -1230,7 +1230,7 @@ Stargate always returns HTTP 200 for successfully processed requests (even if th
 
 | Status | When | Body |
 |--------|------|------|
-| `400` | Missing `command` field, invalid JSON, or trailing data | `{ "error": "missing required field: command" }` |
+| `400` | Missing `command` field, invalid JSON, or trailing data | `{ "error": "..." }` |
 | `413` | Request body exceeds transport limit | `{ "error": "request body too large" }` |
 | `500` | Internal server error | `{ "error": "internal server error: ..." }` |
 | `503` | Server shutting down or not yet ready | `{ "error": "server not ready" }` |

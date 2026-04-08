@@ -34,18 +34,22 @@ type ClassifyRequest struct {
 }
 
 // ClassifyResponse is the output of the classifier.
+// All fields match the spec §6.1 response schema. Fields not yet implemented
+// (FeedbackToken, Corpus) are nil in M2 for forward compatibility.
 type ClassifyResponse struct {
-	Decision     string            `json:"decision"`
-	Action       string            `json:"action"`
-	Reason       string            `json:"reason"`
-	Guidance     string            `json:"guidance,omitempty"`
-	StargateTrID string            `json:"stargate_trace_id"`
-	Rule         *rules.MatchedRule `json:"rule"`
-	LLMReview    *LLMReviewResult  `json:"llm_review"`
-	Timing       *Timing           `json:"timing"`
-	AST          *ASTSummary       `json:"ast"`
-	Context      map[string]any    `json:"context"`
-	Version      string            `json:"version"`
+	Decision      string             `json:"decision"`
+	Action        string             `json:"action"`
+	Reason        string             `json:"reason"`
+	Guidance      string             `json:"guidance,omitempty"`
+	StargateTrID  string             `json:"stargate_trace_id"`
+	FeedbackToken *string            `json:"feedback_token"`
+	Rule          *rules.MatchedRule `json:"rule"`
+	LLMReview     *LLMReviewResult   `json:"llm_review"`
+	Timing        *Timing            `json:"timing"`
+	AST           *ASTSummary        `json:"ast"`
+	Context       map[string]any     `json:"context"`
+	Corpus        *CorpusSummary     `json:"corpus"`
+	Version       string             `json:"version"`
 }
 
 // LLMReviewResult holds the result of an LLM review (populated in M4).
@@ -60,6 +64,13 @@ type LLMReviewResult struct {
 	FilesDenied    []string `json:"files_denied"`
 	Rounds         int      `json:"rounds"`
 	DurationMs     float64  `json:"duration_ms"`
+}
+
+// CorpusSummary holds precedent corpus interaction details (populated in M5).
+// Shape matches spec §6.1.
+type CorpusSummary struct {
+	PrecedentsFound int  `json:"precedents_found"`
+	EntryWritten    bool `json:"entry_written"`
 }
 
 // Timing holds per-phase duration measurements.
