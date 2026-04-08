@@ -183,7 +183,7 @@ func TestClassifyTraceIDFormat(t *testing.T) {
 func TestClassifyTraceIDUnique(t *testing.T) {
 	clf := newClassifier(t)
 	seen := make(map[string]bool)
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		resp := clf.Classify(classifier.ClassifyRequest{Command: "git status"})
 		if seen[resp.StargateTrID] {
 			t.Errorf("duplicate trace ID %q generated", resp.StargateTrID)
