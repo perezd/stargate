@@ -74,6 +74,9 @@ func (s *Server) handleClassify(w http.ResponseWriter, r *http.Request) {
 	// Body limit must exceed MaxCommandLength to ensure the classifier (not the
 	// transport) handles oversized commands with a proper ClassifyResponse.
 	// Cap the multiplied value to avoid int64 overflow on extreme configs.
+	// MaxCommandLength > 1GB is unrealistic for a bash command classifier
+	// (default is 64KB). If configured above 1GB, the transport may reject
+	// before the classifier — acceptable for that edge case.
 	cmdLen := min(int64(cfg.Classifier.MaxCommandLength), 1<<30) // cap at 1GB before multiply
 	maxBody := max(cmdLen*4, 1<<20)                               // 4x headroom, min 1MB
 	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
