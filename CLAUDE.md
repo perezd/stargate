@@ -23,6 +23,17 @@ Stargate is a security-critical component — it sits in the trust path between 
 
 ## Modification Protocol
 
+### Milestone Transition Protocol
+
+After merging a significant PR (typically a milestone), perform a design verification pass before starting the next milestone:
+
+1. **Retrospective** — Document what was underspecified, what drove review feedback, and what edge cases were discovered during implementation. Add a retrospective note to the implementation plan.
+2. **Spec hardening** — Update the design spec with lessons learned: edge case matrices, explicit design decisions, known limitations. The spec should be enriched with implementation knowledge so future milestones benefit.
+3. **Panel review of next milestone's design** — Before writing implementation code, enumerate the edge cases for the next milestone's component and run the expert panel against the spec section. Resolve all findings in the spec before starting implementation.
+4. **Design verification in the plan** — If the panel surfaced decisions (e.g., "how should flag normalization work?"), record them explicitly in the spec and plan. Don't discover design decisions through code review — discover them through design review.
+
+This protocol exists because M1 (Parser + Walker) demonstrated that underspecified design leads to long review tails (84 threads, 20 rounds). The cost of a 30-minute design verification pass is much lower than 20 rounds of implementation-time discovery.
+
 ### Layer-Impact Assessment
 
 Before every modification, explicitly state:
