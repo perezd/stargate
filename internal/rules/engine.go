@@ -103,6 +103,13 @@ func compileRules(rules []config.Rule, level string) ([]compiledRule, error) {
 			}
 		}
 
+		// Validate args glob patterns at compile time.
+		for _, argPat := range r.Args {
+			if !doublestar.ValidatePattern(argPat) {
+				return nil, fmt.Errorf("rules.%s[%d]: invalid glob pattern %q", level, i, argPat)
+			}
+		}
+
 		compiled = append(compiled, compiledRule{
 			rule:            r,
 			index:           i,
@@ -135,19 +142,18 @@ func (e *Engine) Evaluate(cmds []CommandInfo, rawCommand string) *Result {
 	}
 
 	// Phase 2: GREEN — all commands must match some green rule.
+	greenMatched := make([]bool, len(cmds))
 	if len(cmds) > 0 && len(e.green) > 0 {
 		allGreen := true
 		for i := range cmds {
-			matched := false
 			for j := range e.green {
 				if matchRule(&e.green[j], &cmds[i], rawCommand) {
-					matched = true
+					greenMatched[i] = true
 					break
 				}
 			}
-			if !matched {
+			if !greenMatched[i] {
 				allGreen = false
-				break
 			}
 		}
 		if allGreen {
@@ -164,8 +170,11 @@ func (e *Engine) Evaluate(cmds []CommandInfo, rawCommand string) *Result {
 		}
 	}
 
-	// Phase 3: YELLOW — first match for any unmatched command.
+	// Phase 3: YELLOW — first match for any command that didn't match GREEN.
 	for i := range cmds {
+		if greenMatched[i] {
+			continue
+		}
 		for j := range e.yellow {
 			if matchRule(&e.yellow[j], &cmds[i], rawCommand) {
 				llmReview := false

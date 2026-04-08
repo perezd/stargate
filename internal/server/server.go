@@ -78,7 +78,18 @@ func (s *Server) handleClassify(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
+		// Distinguish oversized payloads from malformed JSON.
+		if err.Error() == "http: request body too large" {
+			writeJSONError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	// Reject trailing data after the JSON object.
+	if dec.More() {
+		writeJSONError(w, http.StatusBadRequest, "unexpected trailing data after JSON object")
 		return
 	}
 
