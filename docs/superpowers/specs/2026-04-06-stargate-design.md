@@ -1230,10 +1230,12 @@ Stargate always returns HTTP 200 for successfully processed requests (even if th
 
 | Status | When | Body |
 |--------|------|------|
-| `400` | Missing `command` field or invalid JSON | `{ "error": "missing required field: command" }` |
-| `413` | Command exceeds `max_command_length` | `{ "error": "command exceeds maximum length of 65536 bytes" }` |
+| `400` | Missing `command` field, invalid JSON, or trailing data | `{ "error": "missing required field: command" }` |
+| `413` | Request body exceeds transport limit | `{ "error": "request body too large" }` |
 | `500` | Internal server error | `{ "error": "internal server error: ..." }` |
 | `503` | Server shutting down or not yet ready | `{ "error": "server not ready" }` |
+
+Note: Commands exceeding `max_command_length` are classified as RED (decision=red, action=block) via the normal 200 response, not as an HTTP error. This ensures clients always receive a structured `ClassifyResponse` with trace ID and timing.
 
 ### 6.2 Feedback API (`POST /feedback`)
 

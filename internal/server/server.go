@@ -101,7 +101,7 @@ func (s *Server) handleClassify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if strings.TrimSpace(req.Command) == "" {
-		writeJSONError(w, http.StatusBadRequest, "command field is required")
+		writeJSONError(w, http.StatusBadRequest, "missing required field: command")
 		return
 	}
 
