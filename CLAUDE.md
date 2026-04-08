@@ -71,7 +71,10 @@ After a PR is created and pushed, run an automated review loop:
    done
    echo "TIMEOUT: No reviews after $MAX_POLLS polls"
    ```
-   Dispatch haiku subagent with: "Run `/tmp/poll-pr.sh {N}` and report the output."
+   Run the script as a background Bash command (not a subagent — subagents can't get bash permission approval in background mode):
+   ```
+   Bash(command="/tmp/poll-pr.sh {N}", run_in_background=true, timeout=600000)
+   ```
 
 2. **When unresolved threads are found**, the main agent:
    - Reads ALL findings (use `--paginate` on all `gh api` list endpoints — reviews, comments, threads)
