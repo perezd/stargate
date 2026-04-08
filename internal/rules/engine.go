@@ -112,6 +112,7 @@ func compileRules(rules []config.Rule, level string) ([]compiledRule, error) {
 				"any": true, "pipeline_sink": true, "pipeline_source": true,
 				"pipeline": true, "subshell": true, "substitution": true,
 				"condition": true, "function": true, "redirect": true,
+				"background": true, // reserved — accepted in config, returns false in matching
 			}
 			if !validContexts[r.Context] {
 				return nil, fmt.Errorf("rules.%s[%d]: invalid context %q", level, i, r.Context)

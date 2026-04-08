@@ -445,10 +445,10 @@ func TestScopeMatching(t *testing.T) {
 			wantDecn: "yellow", // falls to default
 		},
 		{
-			name:     "rm /etc/../var/secret does NOT match scope /etc (cleaned to /var/secret)",
+			name:     "chown /etc/../var/secret does NOT match scope /etc (path.Clean resolves traversal)",
 			cmds:     []CommandInfo{{Name: "chown", Args: []string{"/etc/../var/secret"}}},
 			raw:      "chown /etc/../var/secret",
-			wantDecn: "yellow", // filepath.Clean resolves traversal
+			wantDecn: "yellow", // path.Clean resolves /etc/../var/secret to /var/secret
 		},
 	}
 

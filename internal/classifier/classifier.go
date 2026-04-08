@@ -49,9 +49,17 @@ type ClassifyResponse struct {
 }
 
 // LLMReviewResult holds the result of an LLM review (populated in M4).
+// Shape matches the documented spec §6.1 to avoid breaking API changes later.
 type LLMReviewResult struct {
-	Decision string `json:"decision"`
-	Reason   string `json:"reason"`
+	Performed      bool     `json:"performed"`
+	Decision       string   `json:"decision"`
+	Reasoning      string   `json:"reasoning"`
+	RiskFactors    []string `json:"risk_factors"`
+	FilesRequested []string `json:"files_requested"`
+	FilesInspected []string `json:"files_inspected"`
+	FilesDenied    []string `json:"files_denied"`
+	Rounds         int      `json:"rounds"`
+	DurationMs     float64  `json:"duration_ms"`
 }
 
 // Timing holds per-phase duration measurements.
