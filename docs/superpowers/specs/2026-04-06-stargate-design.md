@@ -168,7 +168,7 @@ Some commands are safe or dangerous depending on *what they target*, not just wh
 
 Two primitives:
 
-**Scopes** are operator-defined named sets of trusted patterns in `stargate.toml`. They are the trust anchor — outside the repo, under the operator's control, not tamperable by repo contents or prompt injection. Scope values support glob wildcards (`*` matches any sequence of characters, `?` matches a single character), enabling patterns like `*.example.com` to trust all subdomains or `my-org-*` to trust all repos with a common prefix.
+**Scopes** are operator-defined named sets of trusted patterns in `stargate.toml`. They are the trust anchor — outside the repo, under the operator's control, not tamperable by repo contents or prompt injection. Scope values support glob wildcards (`*` matches any sequence of characters, `?` matches a single character), enabling patterns like `*.example.com` to trust all subdomains or `my-org-*` to trust all repos with a common prefix. Note: `*.example.com` does NOT match `example.com` itself (the `*` requires at least one character) — use `["*.example.com", "example.com"]` to match both. Bare `*` and `**` patterns are rejected at config load time.
 
 **Resolvers** are built-in Go functions that extract the target value from a parsed `CommandInfo`. They answer: "what resource does this command operate on?" Each resolver returns either a resolved value (e.g., a GitHub owner name) or "unresolvable."
 
@@ -198,30 +198,65 @@ reason = "HTTP requests to trusted domains."
 A resolver is a function with the signature:
 
 ```go
-type Resolver func(cmd CommandInfo, cwd string) (value string, ok bool)
+type Resolver func(ctx context.Context, cmd rules.CommandInfo, cwd string) (value string, ok bool, err error)
 ```
 
+- `ctx` is the request context, used for cancellation and timeouts on I/O operations (e.g., reading `.git/config`).
 - If the resolver returns a value and it matches any pattern in the named scope (exact or glob) → the rule matches.
 - If the resolver returns a value and no pattern in the scope matches → the rule does not match (falls through to other rules).
-- If the resolver returns "unresolvable" → the rule does not match (falls through, likely to YELLOW → LLM review).
+- If the resolver returns `ok=false` (unresolvable) → the rule does not match (falls through, likely to YELLOW → LLM review).
+- If the resolver returns an `error` → treated as unresolvable (fail-closed), error is logged.
+
+**Integration with the rule engine:** `Engine.Evaluate` accepts `cwd` as a parameter alongside `cmds` and `rawCommand`. The CWD originates from `ClassifyRequest.CWD` and is threaded through `matchRule` to the resolver. Resolvers that perform disk I/O (e.g., reading `.git/config`) should cache results per-request (same CWD within one `Evaluate` call), not globally across requests.
+
+**Config validation:** At config load time, every `resolve.scope` reference in a rule is validated against the defined `[scopes]` map. An undefined scope reference is a config error (not a silent no-match).
+
+**Scope pattern validation:** Bare `*` and `**` patterns in scope values are rejected at config load time — they match everything and silently defeat the scope layer. Glob patterns like `*.example.com` and `my-org-*` are permitted but operators should be aware that overly broad patterns (e.g., `my-*`) may match unintended values.
 
 ### 4.4 Built-in Resolvers
 
-Stargate ships with a small set of resolvers. New resolvers require a code change, but new scopes and new rule bindings are pure config.
+Stargate ships with a small set of resolvers. New resolvers require a code change, but new scopes and new rule bindings are pure config. `k8s_context` and `docker_registry` are deferred to a future milestone; `github_repo_owner` and `url_domain` ship first since the default config has rules for them.
 
-| Resolver | Extracts | Used For |
-|----------|----------|----------|
-| `github_repo_owner` | GitHub owner from `--repo`/`-R` flag, `gh api repos/<owner>/...` path parsing, or inference from `.git/config` (treated as a claim to verify, not trusted) | `gh` commands |
-| `url_domain` | Domain from URL arguments | `curl`, `wget`, `ssh`, etc. |
-| `k8s_context` | Kubernetes context from `--context` flag or kubeconfig | `kubectl` commands |
-| `docker_registry` | Registry hostname from image references | `docker push/pull` |
+| Resolver | Extracts | Used For | Status |
+|----------|----------|----------|--------|
+| `github_repo_owner` | GitHub owner from `gh` commands | `gh` commands | M3 |
+| `url_domain` | Domain from URL arguments | `curl`, `wget`, etc. | M3 |
+| `k8s_context` | Kubernetes context from `--context` flag | `kubectl` commands | Deferred |
+| `docker_registry` | Registry hostname from image references | `docker push/pull` | Deferred |
 
-The `github_repo_owner` resolver deserves special attention:
+#### `github_repo_owner` Resolver
 
-1. Parses explicit `--repo`/`-R` flags first (highest confidence).
-2. For `gh api`, parses the API path to extract `repos/<owner>/<repo>` with traversal/injection validation.
-3. Falls back to reading `.git/config` to determine what `gh` would infer — but treats this as a **claim to verify** against the scope, not a trusted value. A maliciously rewritten `.git/config` pointing to `evil-org/repo` would fail the scope check because `evil-org` isn't in `github_owners`.
-4. Returns "unresolvable" if the target cannot be determined — falls through to YELLOW/LLM review.
+Extraction priority (highest to lowest confidence):
+
+1. **Explicit `--repo`/`-R` flag:** Parse `owner/repo` from the flag value. Extract owner.
+2. **`gh api` path parsing:** Extract `repos/<owner>/<repo>` from the first positional argument. Validation:
+   - URL-decode the path first (`%2F` → `/`, `%2E` → `.`)
+   - Canonicalize: split on `/`, reject any segment that is `..` or empty (catches `//` and traversal)
+   - Extract owner from the second segment after `repos/`
+   - Reject if owner or repo contain characters outside `[a-zA-Z0-9._-]`
+3. **`.git/config` inference:** Read the `origin` remote URL only (not other remotes — using all remotes would let an attacker add a trusted remote to bypass scope checks). Supported URL formats:
+   - HTTPS: `https://github.com/<owner>/<repo>[.git]`
+   - SSH scp-style: `git@github.com:<owner>/<repo>[.git]`
+   - SSH URL: `ssh://git@github.com[:<port>]/<owner>/<repo>[.git]`
+   - Unparseable URLs → return unresolvable
+4. **Unresolvable:** If none of the above produces a value → return `ok=false`.
+
+**Known limitations:**
+- `GH_REPO` environment variable: `gh` respects `GH_REPO` as a session-wide repo override, but stargate cannot see the process environment (only inline `FOO=bar cmd` assignments in `CommandInfo.Env`). If `GH_REPO` is set in the outer shell, the resolver infers from `.git/config` while `gh` targets the `GH_REPO` value — a mismatch. The scope check mitigates this (the resolved value must still match a trusted scope), but operators should use explicit `--repo` when `GH_REPO` is set.
+- `gh repo set-default`: stored in `.git/config` under the `gh-resolved` key. Not read by the resolver — treated the same as `.git/config` inference via the origin remote.
+
+#### `url_domain` Resolver
+
+Extracts the domain (hostname) from URL arguments in `CommandInfo.Args`.
+
+1. Scan args for the first value that looks like a URL (contains `://` or starts with a recognized scheme).
+2. Parse using Go's `net/url.Parse`. Extract the `Host` field.
+3. Strip port if present (e.g., `example.com:8080` → `example.com`).
+4. Reject `file:`, `data:`, and other non-network schemes → return unresolvable.
+5. For schemeless URLs (no `://`), prepend `https://` before parsing.
+6. If no URL argument found → return unresolvable.
+
+**Edge cases handled:** userinfo (`user:pass@host` → host is extracted correctly by `net/url.Parse`), IPv6 (`[::1]` → returned as-is), ports (stripped).
 
 ### 4.5 Scope Injection into LLM Prompts
 
