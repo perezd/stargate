@@ -44,8 +44,3 @@ func DefaultResolverRegistry() *ResolverRegistry {
 	return rr
 }
 
-// ResolveURLDomain is a placeholder for the url_domain resolver.
-// It will be implemented in a subsequent milestone.
-func ResolveURLDomain(_ context.Context, _ rules.CommandInfo, _ string) (string, bool, error) {
-	return "", false, nil
-}
