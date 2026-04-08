@@ -1,0 +1,17 @@
+# Quoting evasion: the parser resolves single-quoted 'rm' to command name rm.
+'rm' -rf /	red
+# Wrapper stripping: command, env, nice all get stripped by the walker.
+command rm -rf /	red
+env rm -rf /	red
+nice rm -rf /	red
+# Chained wrappers: sudo is stripped, then env is stripped, then rm -rf / matches.
+sudo env rm -rf /	red
+# Double-quoted command names: parser resolves quotes.
+"rm" -rf /	red
+# Semicolon chaining: rm -rf is a separate command and triggers RED.
+echo safe; rm -rf /	red
+# Command substitution in command position: unresolvable → yellow.
+$(echo rm) -rf /	yellow
+# Backslash evasion: \rm is treated as literal command name by mvdan.cc/sh.
+# Known M2 gap — does not match rm RED rules. Falls to default yellow.
+\rm -rf /	yellow

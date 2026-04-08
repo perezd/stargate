@@ -1,0 +1,9 @@
+git status	green
+git diff	green
+git log --oneline	green
+ls -la	green
+cat /tmp/file	green
+echo hello	green
+pwd	green
+go test ./...	green
+mkdir -p /tmp/test	green

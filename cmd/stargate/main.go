@@ -135,7 +135,11 @@ func handleServe(args []string, configPath string, verbose bool) int {
 		listenAddr = listenOverride
 	}
 
-	srv := server.New(cfg)
+	srv, err := server.New(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "serve: %v\n", err)
+		return 1
+	}
 	httpSrv := &http.Server{
 		Addr:              listenAddr,
 		Handler:           srv,
