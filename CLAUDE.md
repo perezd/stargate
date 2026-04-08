@@ -47,7 +47,7 @@ After a PR is created and pushed, run an automated review loop:
    ```
    Bash(run_in_background=true, timeout=2100000, command="for i in $(seq 1 6); do echo \"Poll $i/6 at $(date)\"; UNRESOLVED=$(gh api graphql -f query='{ repository(owner: \"{owner}\", name: \"{repo}\") { pullRequest(number: {N}) { reviewThreads(last: 50) { nodes { id isResolved } } } } }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length'); COPILOT=$(gh api repos/{owner}/{repo}/pulls/{N}/reviews --paginate --jq '[.[] | select(.user.login | test(\"copilot\"))] | last | .body // \"\"'); [ \"$UNRESOLVED\" -gt 0 ] 2>/dev/null && echo \"FOUND: $UNRESOLVED unresolved threads\" && exit 0; echo \"$COPILOT\" | grep -q 'generated no new comments' && echo 'TERMINAL: Copilot reports no new comments' && exit 0; echo \"No findings (unresolved=$UNRESOLVED)\"; [ $i -lt 6 ] && sleep 300; done; echo 'TIMEOUT: No reviews after 6 polls'")
    ```
-   Note: `reviewThreads(last: 50)` does not paginate via `--paginate` for GraphQL. This is sufficient because threads are resolved each round and never accumulate past 50. The timeout (2,100,000ms = 35min) covers 6 polls × 5min with buffer.
+   Note: `reviewThreads(last: 50)` does not paginate via `--paginate` for GraphQL. This is sufficient because threads are resolved each round and never accumulate past 50. The loop performs 6 polls with 5 sleeps (~25min of sleeping plus API call time); the timeout (2,100,000ms = 35min) provides wall-clock buffer.
    Do NOT use subagents for polling — they can't get bash permission approval in background mode.
 
 2. **When unresolved threads are found**, the main agent:
@@ -57,7 +57,7 @@ After a PR is created and pushed, run an automated review loop:
    - Runs a self-review before pushing (go test, go vet, check for related issues in the same category)
    - Pushes the branch
    - Replies to and resolves each review thread via the GitHub API
-   - Re-requests Copilot review: `gh api repos/{owner}/{repo}/pulls/{n}/requested_reviewers -X POST -f 'reviewers[]=copilot-pull-request-reviewer[bot]'`
+   - Re-requests Copilot review: `gh api repos/{owner}/{repo}/pulls/{N}/requested_reviewers -X POST -f 'reviewers[]=copilot-pull-request-reviewer[bot]'`
 
 3. **Re-launch the background poller** — return to step 1 with a new background Bash command.
 
