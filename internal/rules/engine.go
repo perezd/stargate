@@ -169,6 +169,7 @@ func (e *Engine) Evaluate(cmds []CommandInfo, rawCommand string) *Result {
 	return &Result{
 		Decision: e.defaultDecision,
 		Action:   decisionToAction(e.defaultDecision),
+		Reason:   "no rule matched; applied default classification",
 	}
 }
 

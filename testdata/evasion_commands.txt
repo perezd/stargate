@@ -12,3 +12,6 @@ sudo env rm -rf /	red
 echo safe; rm -rf /	red
 # Command substitution in command position: unresolvable → yellow.
 $(echo rm) -rf /	yellow
+# Backslash evasion: \rm is treated as literal command name by mvdan.cc/sh.
+# Known M2 gap — does not match rm RED rules. Falls to default yellow.
+\rm -rf /	yellow

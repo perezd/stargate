@@ -433,10 +433,10 @@ func TestScopeMatching(t *testing.T) {
 			wantDecn: "red",
 		},
 		{
-			name:     "chown with /etc/passwd matches scope / (root scope)",
-			cmds:     []CommandInfo{{Name: "chown", Flags: []string{"-R"}, Args: []string{"root", "/etc/passwd"}}},
-			raw:      "chown -R root /etc/passwd",
-			wantDecn: "red",
+			name:     "chown with /var/log does NOT match scope /etc",
+			cmds:     []CommandInfo{{Name: "chown", Flags: []string{"-R"}, Args: []string{"root", "/var/log"}}},
+			raw:      "chown -R root /var/log",
+			wantDecn: "yellow",
 		},
 		{
 			name:     "chown with ./relative does NOT match scope /etc",

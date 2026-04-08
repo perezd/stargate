@@ -4,6 +4,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -64,12 +65,22 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleClassify(w http.ResponseWriter, r *http.Request) {
+	// Limit request body to prevent oversized payloads from consuming memory.
+	// The command field has its own max-length check in the classifier, but we
+	// also need to bound the total JSON body (which includes context, description, etc.).
+	cfg := s.cfg.Load()
+	maxBody := max(int64(cfg.Classifier.MaxCommandLength*2), 1<<20) // headroom for JSON envelope, min 1MB
+	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+
 	var req classifier.ClassifyRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
 
+	req.Command = strings.TrimSpace(req.Command)
 	if req.Command == "" {
 		writeJSONError(w, http.StatusBadRequest, "command field is required")
 		return
