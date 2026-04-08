@@ -66,24 +66,27 @@ func extractURLCandidate(arg string) (string, bool) {
 		return arg, true
 	}
 
-	// Schemeless candidate: contains a dot, not a flag, not a path.
-	if strings.Contains(arg, ".") &&
-		!strings.HasPrefix(arg, "-") &&
+	// Schemeless candidate: not a flag or obvious path, and the host segment
+	// (before the first "/") contains a dot. This prevents "dir/output.txt"
+	// from being treated as a domain.
+	if !strings.HasPrefix(arg, "-") &&
 		!strings.HasPrefix(arg, "/") &&
 		!strings.HasPrefix(arg, "./") &&
 		!strings.HasPrefix(arg, "../") {
-		// Skip args that look like filenames: no "/" in the arg and the suffix
-		// after the last "." is a known file extension.
-		if !strings.Contains(arg, "/") {
-			lastDot := strings.LastIndex(arg, ".")
-			if lastDot >= 0 {
-				ext := strings.ToLower(arg[lastDot+1:])
-				if commonFileExts[ext] {
-					return "", false
+		hostSegment, _, _ := strings.Cut(arg, "/")
+		if strings.Contains(hostSegment, ".") {
+			// Skip bare filenames with known extensions (no path separator).
+			if !strings.Contains(arg, "/") {
+				lastDot := strings.LastIndex(arg, ".")
+				if lastDot >= 0 {
+					ext := strings.ToLower(arg[lastDot+1:])
+					if commonFileExts[ext] {
+						return "", false
+					}
 				}
 			}
+			return "https://" + arg, true
 		}
-		return "https://" + arg, true
 	}
 
 	return "", false

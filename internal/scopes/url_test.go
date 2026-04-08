@@ -123,6 +123,19 @@ func TestResolveURLDomain(t *testing.T) {
 			wantOK:     true,
 		},
 
+		// Relative path with dotted filename not confused with domain.
+		{
+			name:       "dir/output.txt before real URL",
+			args:       []string{"dir/output.txt", "https://api.example.com"},
+			wantDomain: "api.example.com",
+			wantOK:     true,
+		},
+		{
+			name:   "dir/output.txt alone",
+			args:   []string{"dir/output.txt"},
+			wantOK: false,
+		},
+
 		// No URL found.
 		{
 			name:   "only flags no URL",
