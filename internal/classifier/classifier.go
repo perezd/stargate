@@ -163,13 +163,35 @@ func (c *Classifier) Classify(req ClassifyRequest) *ClassifyResponse {
 	}
 
 	// 4. Rule engine evaluation.
-	// Unresolvable commands (Name == "") are handled by the engine:
-	// they never match command/commands rules, so they fail GREEN and
-	// fall to YELLOW/default. This ensures RED rules still fire for
+	// Unresolvable commands (Name == "") never match command/commands rules,
+	// so they fail GREEN and fall to YELLOW/default. RED rules still fire for
 	// other commands in the same input (e.g., "$(echo rm); rm -rf /").
 	rulesStart := time.Now()
 	result := c.engine.Evaluate(cmds, req.Command)
 	rulesUs := time.Since(rulesStart).Microseconds()
+
+	// 5. Apply unresolvable_expansion policy.
+	// If the engine returned a default decision (no rule matched) and any
+	// command was unresolvable, override with the unresolvable_expansion
+	// policy — but never downgrade a RED or explicit YELLOW result.
+	if result.Rule == nil {
+		for i := range cmds {
+			if cmds[i].Name == "" {
+				decision := c.unresolvable
+				result.Decision = decision
+				switch decision {
+				case "red":
+					result.Action = "block"
+				case "green":
+					result.Action = "allow"
+				default:
+					result.Action = "review"
+				}
+				result.Reason = "command name could not be statically resolved"
+				break
+			}
+		}
+	}
 
 	elapsed := time.Since(start)
 

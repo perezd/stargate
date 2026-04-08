@@ -307,9 +307,9 @@ func matchRule(cr *compiledRule, cmd *CommandInfo, rawCommand string) bool {
 	return true
 }
 
-// isDecomposable returns true if the flag (after stripping leading '-' and any '=value')
-// is a combined short flag: starts with single '-' (not '--'), and ALL characters
-// after the '-' are ASCII letters.
+// isDecomposable returns true if the flag is a combined short flag: starts with
+// single '-' (not '--'), and ALL characters after the '-' are ASCII letters.
+// Callers must strip any '=value' suffix via stripFlagValue before calling.
 func isDecomposable(flag string) bool {
 	if strings.HasPrefix(flag, "--") {
 		return false
