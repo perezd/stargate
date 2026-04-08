@@ -40,13 +40,14 @@ After a PR is created and pushed, run an automated review loop:
 
 0. **Request initial Copilot review** immediately after creating the PR:
    ```bash
-   gh api repos/limbic-systems/stargate/pulls/{N}/requested_reviewers -X POST -f 'reviewers[]=copilot-pull-request-reviewer[bot]'
+   gh api repos/{owner}/{repo}/pulls/{N}/requested_reviewers -X POST -f 'reviewers[]=copilot-pull-request-reviewer[bot]'
    ```
 
 1. **Poll for review feedback** — run an inline polling loop as a background Bash command. Each PR gets its own independent background poller (multiple PRs can poll simultaneously). Replace `{N}` with the PR number:
    ```
-   Bash(run_in_background=true, timeout=600000, command="for i in $(seq 1 6); do echo \"Poll $i/6 at $(date)\"; UNRESOLVED=$(gh api graphql -f query='{ repository(owner: \"limbic-systems\", name: \"stargate\") { pullRequest(number: {N}) { reviewThreads(last: 50) { nodes { id isResolved } } } } }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length'); COPILOT=$(gh api repos/limbic-systems/stargate/pulls/{N}/reviews --paginate --jq '[.[] | select(.user.login | test(\"copilot\"))] | last | .body // \"\"'); [ \"$UNRESOLVED\" -gt 0 ] 2>/dev/null && echo \"FOUND: $UNRESOLVED unresolved threads\" && exit 0; echo \"$COPILOT\" | grep -q 'generated no new comments' && echo 'TERMINAL: Copilot reports no new comments' && exit 0; echo \"No findings (unresolved=$UNRESOLVED)\"; [ $i -lt 6 ] && sleep 300; done; echo 'TIMEOUT: No reviews after 6 polls'")
+   Bash(run_in_background=true, timeout=2100000, command="for i in $(seq 1 6); do echo \"Poll $i/6 at $(date)\"; UNRESOLVED=$(gh api graphql -f query='{ repository(owner: \"{owner}\", name: \"{repo}\") { pullRequest(number: {N}) { reviewThreads(last: 50) { nodes { id isResolved } } } } }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length'); COPILOT=$(gh api repos/{owner}/{repo}/pulls/{N}/reviews --paginate --jq '[.[] | select(.user.login | test(\"copilot\"))] | last | .body // \"\"'); [ \"$UNRESOLVED\" -gt 0 ] 2>/dev/null && echo \"FOUND: $UNRESOLVED unresolved threads\" && exit 0; echo \"$COPILOT\" | grep -q 'generated no new comments' && echo 'TERMINAL: Copilot reports no new comments' && exit 0; echo \"No findings (unresolved=$UNRESOLVED)\"; [ $i -lt 6 ] && sleep 300; done; echo 'TIMEOUT: No reviews after 6 polls'")
    ```
+   Note: `reviewThreads(last: 50)` does not paginate via `--paginate` for GraphQL. This is sufficient because threads are resolved each round and never accumulate past 50. The timeout (2,100,000ms = 35min) covers 6 polls × 5min with buffer.
    Do NOT use subagents for polling — they can't get bash permission approval in background mode.
 
 2. **When unresolved threads are found**, the main agent:
