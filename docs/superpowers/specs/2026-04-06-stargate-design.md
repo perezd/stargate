@@ -1666,6 +1666,7 @@ A rule matches if **all** specified fields match. Fields not specified are wildc
    - Only absolute path arguments (starting with `/`) are considered for scope matching. Relative paths, `~`, and `$HOME` do not match scope rules — they fall through to YELLOW via the default decision. This is intentional: scope rules express trust boundaries over absolute filesystem paths.
    - Matching is `strings.HasPrefix(filepath.Clean(arg), normalizedScope)`.
    - `scope = "/"` matches all absolute paths (system-wide).
+   - **Known limitation:** `filepath.Clean` resolves lexical `..` but does not resolve symlinks. A symlink like `/trusted/link → /etc` would pass scope matching for `scope = "/trusted/"` while targeting `/etc`. This requires prior local shell access to create the symlink and is mitigated by the LLM review layer. Future hardening: consider `filepath.EvalSymlinks`.
 
 6. **`context`**: If present, require `CommandContext` to match. Valid context values:
    - `"any"` or `""` — wildcard (default, matches everything)
