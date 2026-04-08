@@ -3,6 +3,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -21,14 +22,13 @@ type Server struct {
 }
 
 // New creates a new Server with the given config and registers all routes.
-// Panics if cfg is nil or if the classifier cannot be initialised.
-func New(cfg *config.Config) *Server {
+func New(cfg *config.Config) (*Server, error) {
 	if cfg == nil {
-		panic("server.New: config must not be nil")
+		return nil, fmt.Errorf("server.New: config must not be nil")
 	}
 	clf, err := classifier.New(cfg)
 	if err != nil {
-		panic("server.New: classifier init failed: " + err.Error())
+		return nil, fmt.Errorf("server.New: classifier init: %w", err)
 	}
 	s := &Server{
 		mux:       http.NewServeMux(),
@@ -37,7 +37,7 @@ func New(cfg *config.Config) *Server {
 	}
 	s.cfg.Store(cfg)
 	s.registerRoutes()
-	return s
+	return s, nil
 }
 
 // ServeHTTP implements http.Handler by delegating to the mux.
@@ -69,7 +69,9 @@ func (s *Server) handleClassify(w http.ResponseWriter, r *http.Request) {
 	// The command field has its own max-length check in the classifier, but we
 	// also need to bound the total JSON body (which includes context, description, etc.).
 	cfg := s.cfg.Load()
-	maxBody := max(int64(cfg.Classifier.MaxCommandLength*2), 1<<20) // headroom for JSON envelope, min 1MB
+	// Body limit must exceed MaxCommandLength to ensure the classifier (not the
+	// transport) handles oversized commands with a proper ClassifyResponse.
+	maxBody := max(int64(cfg.Classifier.MaxCommandLength)*4, 1<<20) // 4x headroom, min 1MB
 	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
 
 	var req classifier.ClassifyRequest

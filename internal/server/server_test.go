@@ -54,9 +54,18 @@ func testConfig() *config.Config {
 	}
 }
 
+func mustNewServer(t *testing.T, cfg *config.Config) *server.Server {
+	t.Helper()
+	srv, err := server.New(cfg)
+	if err != nil {
+		t.Fatalf("server.New: %v", err)
+	}
+	return srv
+}
+
 func TestHealthEndpoint(t *testing.T) {
 	cfg := testConfig()
-	srv := server.New(cfg)
+	srv := mustNewServer(t, cfg)
 
 	req := httptest.NewRequest("GET", "/health", nil)
 	w := httptest.NewRecorder()
@@ -84,7 +93,7 @@ func TestHealthEndpoint(t *testing.T) {
 
 func TestStubEndpointsReturn501(t *testing.T) {
 	cfg := testConfig()
-	srv := server.New(cfg)
+	srv := mustNewServer(t, cfg)
 
 	endpoints := []struct{ method, path string }{
 		{"POST", "/feedback"},
@@ -122,7 +131,7 @@ func postClassify(t *testing.T, srv http.Handler, body string) (int, *classifier
 }
 
 func TestClassifyGreenCommand(t *testing.T) {
-	srv := server.New(testConfig())
+	srv := mustNewServer(t, testConfig())
 
 	code, resp := postClassify(t, srv, `{"command":"git status"}`)
 	if code != http.StatusOK {
@@ -137,7 +146,7 @@ func TestClassifyGreenCommand(t *testing.T) {
 }
 
 func TestClassifyRedCommand(t *testing.T) {
-	srv := server.New(testConfig())
+	srv := mustNewServer(t, testConfig())
 
 	code, resp := postClassify(t, srv, `{"command":"rm -rf /"}`)
 	if code != http.StatusOK {
@@ -152,7 +161,7 @@ func TestClassifyRedCommand(t *testing.T) {
 }
 
 func TestClassifyMissingCommand(t *testing.T) {
-	srv := server.New(testConfig())
+	srv := mustNewServer(t, testConfig())
 
 	req := httptest.NewRequest("POST", "/classify", bytes.NewBufferString(`{}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -165,7 +174,7 @@ func TestClassifyMissingCommand(t *testing.T) {
 }
 
 func TestClassifyUnknownCommand(t *testing.T) {
-	srv := server.New(testConfig())
+	srv := mustNewServer(t, testConfig())
 
 	code, resp := postClassify(t, srv, `{"command":"unknown_cmd"}`)
 	if code != http.StatusOK {
@@ -177,7 +186,7 @@ func TestClassifyUnknownCommand(t *testing.T) {
 }
 
 func TestClassifyUnparseable(t *testing.T) {
-	srv := server.New(testConfig())
+	srv := mustNewServer(t, testConfig())
 
 	// An unclosed quote is a parse error.
 	code, resp := postClassify(t, srv, `{"command":"echo \"unterminated"}`)
@@ -193,7 +202,7 @@ func TestClassifyUnparseable(t *testing.T) {
 }
 
 func TestClassifyTraceID(t *testing.T) {
-	srv := server.New(testConfig())
+	srv := mustNewServer(t, testConfig())
 
 	code, resp := postClassify(t, srv, `{"command":"git status"}`)
 	if code != http.StatusOK {
@@ -208,7 +217,7 @@ func TestClassifyTraceID(t *testing.T) {
 }
 
 func TestClassifyTimingPopulated(t *testing.T) {
-	srv := server.New(testConfig())
+	srv := mustNewServer(t, testConfig())
 
 	code, resp := postClassify(t, srv, `{"command":"git status"}`)
 	if code != http.StatusOK {
@@ -220,7 +229,7 @@ func TestClassifyTimingPopulated(t *testing.T) {
 }
 
 func TestClassifyASTSummary(t *testing.T) {
-	srv := server.New(testConfig())
+	srv := mustNewServer(t, testConfig())
 
 	code, resp := postClassify(t, srv, `{"command":"git status"}`)
 	if code != http.StatusOK {
@@ -237,7 +246,7 @@ func TestClassifyASTSummary(t *testing.T) {
 func TestClassifyOversizedCommand(t *testing.T) {
 	cfg := testConfig()
 	cfg.Classifier.MaxCommandLength = 20 // very small limit for testing
-	srv := server.New(cfg)
+	srv := mustNewServer(t, cfg)
 
 	// Command exceeds limit — should get a RED classification (not HTTP 413).
 	code, resp := postClassify(t, srv, `{"command":"echo this is a command that exceeds the limit"}`)
@@ -256,7 +265,7 @@ func TestClassifyOversizedCommand(t *testing.T) {
 }
 
 func TestClassifyInvalidJSON(t *testing.T) {
-	srv := server.New(testConfig())
+	srv := mustNewServer(t, testConfig())
 
 	req := httptest.NewRequest("POST", "/classify", bytes.NewBufferString(`{not valid json`))
 	req.Header.Set("Content-Type", "application/json")

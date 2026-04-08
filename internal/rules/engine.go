@@ -20,11 +20,12 @@ type Engine struct {
 	defaultDecision string
 }
 
-// compiledRule holds a config rule with its pre-compiled regex pattern.
+// compiledRule holds a config rule with pre-compiled fields.
 type compiledRule struct {
-	rule    config.Rule
-	index   int
-	pattern *regexp.Regexp
+	rule            config.Rule
+	index           int
+	pattern         *regexp.Regexp
+	normalizedScope string // cleaned and /-suffixed scope, computed at compile time
 }
 
 // Result holds the outcome of rule evaluation.
@@ -81,10 +82,32 @@ func compileRules(rules []config.Rule, level string) ([]compiledRule, error) {
 				return nil, fmt.Errorf("rules.%s[%d]: invalid pattern %q: %w", level, i, r.Pattern, err)
 			}
 		}
+		// Normalize scope at compile time: clean path and ensure trailing /.
+		var normScope string
+		if r.Scope != "" {
+			normScope = filepath.Clean(r.Scope)
+			if normScope != "/" && !strings.HasSuffix(normScope, "/") {
+				normScope += "/"
+			}
+		}
+
+		// Validate context value at compile time.
+		if r.Context != "" {
+			validContexts := map[string]bool{
+				"any": true, "pipeline_sink": true, "pipeline_source": true,
+				"pipeline": true, "subshell": true, "substitution": true,
+				"condition": true, "function": true, "redirect": true,
+			}
+			if !validContexts[r.Context] {
+				return nil, fmt.Errorf("rules.%s[%d]: invalid context %q", level, i, r.Context)
+			}
+		}
+
 		compiled = append(compiled, compiledRule{
-			rule:    r,
-			index:   i,
-			pattern: pat,
+			rule:            r,
+			index:           i,
+			pattern:         pat,
+			normalizedScope: normScope,
 		})
 	}
 	return compiled, nil
@@ -230,8 +253,8 @@ func matchRule(cr *compiledRule, cmd *CommandInfo, rawCommand string) bool {
 	}
 
 	// 5. scope
-	if r.Scope != "" {
-		if !matchScope(r.Scope, cmd.Args) {
+	if cr.normalizedScope != "" {
+		if !matchScope(cr.normalizedScope, cmd.Args) {
 			return false
 		}
 	}
@@ -346,26 +369,17 @@ func matchArgs(ruleArgs, cmdArgs []string) bool {
 	return false
 }
 
-// matchScope checks if any absolute path in cmd args falls within the rule's scope.
-func matchScope(scope string, cmdArgs []string) bool {
-	// Normalize scope: append "/" if not present and not already "/".
-	normalizedScope := scope
-	if normalizedScope != "/" && !strings.HasSuffix(normalizedScope, "/") {
-		normalizedScope += "/"
-	}
-
+// matchScope checks if any absolute path in cmd args falls within the scope.
+// The scope must already be normalized (filepath.Clean'd, /-suffixed) at compile time.
+func matchScope(normalizedScope string, cmdArgs []string) bool {
 	for _, arg := range cmdArgs {
-		// Skip non-absolute paths.
 		if !filepath.IsAbs(arg) {
 			continue
 		}
 		cleaned := filepath.Clean(arg)
-		// For root scope "/", all absolute paths match.
 		if normalizedScope == "/" {
 			return true
 		}
-		// Check prefix: cleaned path must start with the normalized scope,
-		// or be exactly the scope directory (without trailing slash).
 		if strings.HasPrefix(cleaned+"/", normalizedScope) {
 			return true
 		}
