@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/perezd/stargate/internal/config"
-	"github.com/perezd/stargate/internal/parser"
-	"github.com/perezd/stargate/internal/rules"
+	"github.com/limbic-systems/stargate/internal/config"
+	"github.com/limbic-systems/stargate/internal/parser"
+	"github.com/limbic-systems/stargate/internal/rules"
 )
 
 // Classifier orchestrates the parse → rule-engine pipeline.

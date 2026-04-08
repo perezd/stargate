@@ -5,8 +5,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/perezd/stargate/internal/config"
-	"github.com/perezd/stargate/internal/rules"
+	"github.com/limbic-systems/stargate/internal/config"
+	"github.com/limbic-systems/stargate/internal/rules"
 	"mvdan.cc/sh/v3/syntax"
 )
 

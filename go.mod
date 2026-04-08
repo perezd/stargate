@@ -1,4 +1,4 @@
-module github.com/perezd/stargate
+module github.com/limbic-systems/stargate
 
 go 1.26
 

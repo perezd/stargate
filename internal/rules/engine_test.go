@@ -3,7 +3,7 @@ package rules
 import (
 	"testing"
 
-	"github.com/perezd/stargate/internal/config"
+	"github.com/limbic-systems/stargate/internal/config"
 )
 
 // boolPtr is a helper to create a *bool for llm_review fields.

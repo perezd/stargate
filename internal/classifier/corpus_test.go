@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/perezd/stargate/internal/classifier"
-	"github.com/perezd/stargate/internal/config"
+	"github.com/limbic-systems/stargate/internal/classifier"
+	"github.com/limbic-systems/stargate/internal/config"
 )
 
 // TestCorpus classifies every command in the testdata corpus files against the

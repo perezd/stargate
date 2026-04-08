@@ -13,8 +13,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/perezd/stargate/internal/config"
-	"github.com/perezd/stargate/internal/server"
+	"github.com/limbic-systems/stargate/internal/config"
+	"github.com/limbic-systems/stargate/internal/server"
 )
 
 // isLoopbackAddr returns true if addr binds to an explicit loopback IP only.

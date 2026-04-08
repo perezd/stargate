@@ -40,7 +40,7 @@ After a PR is created and pushed, run an automated review loop:
 
 1. **Dispatch a haiku polling subagent** that checks for unresolved review threads every 5 minutes:
    ```bash
-   gh api graphql --paginate -f query='{ repository(owner: "perezd", name: "stargate") {
+   gh api graphql --paginate -f query='{ repository(owner: "limbic-systems", name: "stargate") {
      pullRequest(number: N) { reviewThreads(last: 50) { nodes { id isResolved } } }
    } }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length'
    ```

@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/perezd/stargate/internal/classifier"
-	"github.com/perezd/stargate/internal/config"
+	"github.com/limbic-systems/stargate/internal/classifier"
+	"github.com/limbic-systems/stargate/internal/config"
 )
 
 // Server is the stargate HTTP server.

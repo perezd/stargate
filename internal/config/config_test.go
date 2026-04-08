@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/perezd/stargate/internal/config"
+	"github.com/limbic-systems/stargate/internal/config"
 )
 
 func writeConfig(t *testing.T, content string) string {

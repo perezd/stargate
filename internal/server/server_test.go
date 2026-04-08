@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/perezd/stargate/internal/classifier"
-	"github.com/perezd/stargate/internal/config"
-	"github.com/perezd/stargate/internal/server"
+	"github.com/limbic-systems/stargate/internal/classifier"
+	"github.com/limbic-systems/stargate/internal/config"
+	"github.com/limbic-systems/stargate/internal/server"
 )
 
 // testConfig returns a minimal config with representative RED, GREEN, and

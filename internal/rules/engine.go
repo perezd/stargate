@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
-	"github.com/perezd/stargate/internal/config"
+	"github.com/limbic-systems/stargate/internal/config"
 )
 
 // Engine evaluates commands against compiled classification rules.

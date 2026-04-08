@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/perezd/stargate/internal/rules"
+	"github.com/limbic-systems/stargate/internal/rules"
 	"mvdan.cc/sh/v3/syntax"
 )
 

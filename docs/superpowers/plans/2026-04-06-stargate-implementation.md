@@ -26,7 +26,7 @@ Goal: CLI structure, config loader, HTTP server with `/health`. No classificatio
 
 ```bash
 cd /Users/derek/src/stargate
-go mod init github.com/perezd/stargate
+go mod init github.com/limbic-systems/stargate
 ```
 
 - [ ] **Step 2: Add core dependencies**
@@ -66,7 +66,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/perezd/stargate/internal/config"
+	"github.com/limbic-systems/stargate/internal/config"
 )
 
 func TestLoadMinimalConfig(t *testing.T) {
@@ -237,8 +237,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/perezd/stargate/internal/config"
-	"github.com/perezd/stargate/internal/server"
+	"github.com/limbic-systems/stargate/internal/config"
+	"github.com/limbic-systems/stargate/internal/server"
 )
 
 func TestHealthEndpoint(t *testing.T) {
@@ -439,7 +439,7 @@ package parser_test
 import (
 	"testing"
 
-	"github.com/perezd/stargate/internal/parser"
+	"github.com/limbic-systems/stargate/internal/parser"
 )
 
 func TestParseSimpleCommand(t *testing.T) {
@@ -809,8 +809,8 @@ package rules_test
 import (
 	"testing"
 
-	"github.com/perezd/stargate/internal/config"
-	"github.com/perezd/stargate/internal/rules"
+	"github.com/limbic-systems/stargate/internal/config"
+	"github.com/limbic-systems/stargate/internal/rules"
 )
 
 func TestRedRuleMatchesRmRf(t *testing.T) {
