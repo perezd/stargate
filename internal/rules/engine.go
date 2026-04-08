@@ -3,7 +3,7 @@ package rules
 
 import (
 	"fmt"
-	"path/filepath"
+	"path"
 	"regexp"
 	"slices"
 	"strings"
@@ -97,8 +97,8 @@ func compileRules(rules []config.Rule, level string) ([]compiledRule, error) {
 		// Reject relative scopes — they can never match absolute path arguments.
 		var normScope string
 		if r.Scope != "" {
-			normScope = filepath.Clean(r.Scope)
-			if !filepath.IsAbs(normScope) {
+			normScope = path.Clean(r.Scope)
+			if !path.IsAbs(normScope) {
 				return nil, fmt.Errorf("rules.%s[%d]: scope %q must be an absolute path", level, i, r.Scope)
 			}
 			if normScope != "/" && !strings.HasSuffix(normScope, "/") {
@@ -394,13 +394,14 @@ func matchArgs(ruleArgs, cmdArgs []string) bool {
 }
 
 // matchScope checks if any absolute path in cmd args falls within the scope.
-// The scope must already be normalized (filepath.Clean'd, /-suffixed) at compile time.
+// Uses path (POSIX) semantics, not filepath (OS-specific), since stargate
+// classifies bash commands with POSIX paths.
 func matchScope(normalizedScope string, cmdArgs []string) bool {
 	for _, arg := range cmdArgs {
-		if !filepath.IsAbs(arg) {
+		if !path.IsAbs(arg) {
 			continue
 		}
-		cleaned := filepath.Clean(arg)
+		cleaned := path.Clean(arg)
 		if normalizedScope == "/" {
 			return true
 		}
