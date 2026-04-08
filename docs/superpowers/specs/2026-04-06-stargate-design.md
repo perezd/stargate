@@ -249,12 +249,11 @@ Extraction priority (highest to lowest confidence):
 
 Extracts the domain (hostname) from URL arguments in `CommandInfo.Args`.
 
-1. Scan args for the first value that looks like a URL (contains `://` or starts with a recognized scheme).
+1. Scan args for the first value that looks like a URL: contains `://`, OR matches a domain-like pattern (e.g., contains `.` and no leading `-`). For schemeless matches, prepend `https://` before parsing.
 2. Parse using Go's `net/url.Parse`. Extract the `Host` field.
 3. Strip port if present (e.g., `example.com:8080` → `example.com`).
 4. Reject `file:`, `data:`, and other non-network schemes → return unresolvable.
-5. For schemeless URLs (no `://`), prepend `https://` before parsing.
-6. If no URL argument found → return unresolvable.
+5. If no URL argument found → return unresolvable.
 
 **Edge cases handled:** userinfo (`user:pass@host` → host is extracted correctly by `net/url.Parse`), IPv6 (`[::1]` → returned as-is), ports (stripped).
 
