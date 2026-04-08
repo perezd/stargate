@@ -201,11 +201,11 @@ func TestClassifyVersionField(t *testing.T) {
 	}
 }
 
-func TestClassifyLLMReviewNilInM2(t *testing.T) {
+func TestClassifyLLMReviewNilBeforeM4(t *testing.T) {
 	clf := newClassifier(t)
 	resp := clf.Classify(context.Background(), classifier.ClassifyRequest{Command: "git status"})
 	if resp.LLMReview != nil {
-		t.Error("llm_review should be nil in M2")
+		t.Error("llm_review should be nil until M4 wires LLM review")
 	}
 }
 

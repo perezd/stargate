@@ -107,7 +107,7 @@ func parseURLDomain(raw string) (string, bool) {
 
 	// u.Hostname() correctly strips brackets from IPv6 literals like [::1]
 	// and strips the port if present.
-	host := u.Hostname()
+	host := strings.ToLower(u.Hostname())
 
 	if host == "" {
 		return "", false
