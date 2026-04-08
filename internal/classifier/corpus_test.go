@@ -34,7 +34,6 @@ func TestCorpus(t *testing.T) {
 	}
 
 	for _, file := range files {
-		file := file // capture for subtest
 		t.Run(filepath.Base(file), func(t *testing.T) {
 			data, err := os.ReadFile(file)
 			if err != nil {
