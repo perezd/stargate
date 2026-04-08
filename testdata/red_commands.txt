@@ -1,0 +1,11 @@
+rm -rf /	red
+rm -fr /	red
+rm /etc/passwd	red
+mkfs /dev/sda	red
+dd if=/dev/zero of=/dev/sda	red
+shutdown now	red
+eval "rm -rf /"	red
+iptables -F	red
+chmod 777 /tmp/file	red
+nc -e /bin/sh	red
+sudo rm -rf /	red

@@ -1,0 +1,5 @@
+docker run --rm alpine	yellow
+pip install requests	yellow
+ssh user@host	yellow
+unknown_command	yellow
+make build	yellow
