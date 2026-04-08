@@ -130,7 +130,7 @@ func TestClassifyTimingPopulated(t *testing.T) {
 	}
 	// TotalMs may be 0 on fast machines but must not be negative.
 	if resp.Timing.TotalMs < 0 {
-		t.Errorf("total_ms = %d, must be >= 0", resp.Timing.TotalMs)
+		t.Errorf("total_ms = %f, must be >= 0", resp.Timing.TotalMs)
 	}
 }
 

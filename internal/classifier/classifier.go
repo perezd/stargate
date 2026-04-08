@@ -44,7 +44,7 @@ type ClassifyResponse struct {
 	LLMReview    *LLMReviewResult  `json:"llm_review"`
 	Timing       *Timing           `json:"timing"`
 	AST          *ASTSummary       `json:"ast"`
-	Context      map[string]any    `json:"context,omitempty"`
+	Context      map[string]any    `json:"context"`
 	Version      string            `json:"version"`
 }
 
@@ -56,9 +56,10 @@ type LLMReviewResult struct {
 
 // Timing holds per-phase duration measurements.
 type Timing struct {
-	ParseUs int64 `json:"parse_us"`
-	RulesUs int64 `json:"rules_us"`
-	TotalMs int64 `json:"total_ms"`
+	ParseUs int64   `json:"parse_us"`
+	RulesUs int64   `json:"rules_us"`
+	LLMMs   float64 `json:"llm_ms"`
+	TotalMs float64 `json:"total_ms"`
 }
 
 // ASTSummary summarises relevant properties of the parsed command AST.
@@ -124,7 +125,7 @@ func (c *Classifier) Classify(req ClassifyRequest) *ClassifyResponse {
 	}
 
 	finalize := func() *ClassifyResponse {
-		resp.Timing.TotalMs = time.Since(start).Milliseconds()
+		resp.Timing.TotalMs = float64(time.Since(start).Microseconds()) / 1000
 		return resp
 	}
 
@@ -204,9 +205,11 @@ func buildASTSummary(cmds []rules.CommandInfo) *ASTSummary {
 	for i := range cmds {
 		cmd := &cmds[i]
 
-		// Track max subshell depth.
-		if cmd.Context.SubshellDepth > s.MaxDepth {
-			s.MaxDepth = cmd.Context.SubshellDepth
+		// Track max structural depth (1-based). Reflects subshell nesting and
+		// pipeline position per spec examples (simple cmd = 1, 2-stage pipe = 2).
+		cmdDepth := max(1+cmd.Context.SubshellDepth, cmd.Context.PipelinePosition)
+		if cmdDepth > s.MaxDepth {
+			s.MaxDepth = cmdDepth
 		}
 
 		// Boolean flags.
