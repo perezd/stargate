@@ -38,13 +38,16 @@ This protocol exists because M1 (Parser + Walker) demonstrated that underspecifi
 
 After a PR is created and pushed, run an automated review loop:
 
-1. **Dispatch a haiku polling subagent** that checks for unresolved review threads every 5 minutes:
+0. **Request initial Copilot review** immediately after creating the PR:
    ```bash
-   gh api graphql --paginate -f query='{ repository(owner: "limbic-systems", name: "stargate") {
-     pullRequest(number: N) { reviewThreads(last: 50) { nodes { id isResolved } } }
-   } }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length'
+   gh api repos/limbic-systems/stargate/pulls/{N}/requested_reviewers -X POST -f 'reviewers[]=copilot-pull-request-reviewer[bot]'
    ```
-   Report back when unresolved threads > 0 or a new Copilot review appears.
+
+1. **Poll for review feedback** — run an inline polling loop as a background Bash command. Each PR gets its own independent background poller (multiple PRs can poll simultaneously). Replace `{N}` with the PR number:
+   ```
+   Bash(run_in_background=true, timeout=600000, command="for i in $(seq 1 6); do echo \"Poll $i/6 at $(date)\"; UNRESOLVED=$(gh api graphql -f query='{ repository(owner: \"limbic-systems\", name: \"stargate\") { pullRequest(number: {N}) { reviewThreads(last: 50) { nodes { id isResolved } } } } }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length'); COPILOT=$(gh api repos/limbic-systems/stargate/pulls/{N}/reviews --paginate --jq '[.[] | select(.user.login | test(\"copilot\"))] | last | .body // \"\"'); [ \"$UNRESOLVED\" -gt 0 ] 2>/dev/null && echo \"FOUND: $UNRESOLVED unresolved threads\" && exit 0; echo \"$COPILOT\" | grep -q 'generated no new comments' && echo 'TERMINAL: Copilot reports no new comments' && exit 0; echo \"No findings (unresolved=$UNRESOLVED)\"; [ $i -lt 6 ] && sleep 300; done; echo 'TIMEOUT: No reviews after 6 polls'")
+   ```
+   Do NOT use subagents for polling — they can't get bash permission approval in background mode.
 
 2. **When unresolved threads are found**, the main agent:
    - Reads ALL findings (use `--paginate` on all `gh api` list endpoints — reviews, comments, threads)
@@ -55,7 +58,7 @@ After a PR is created and pushed, run an automated review loop:
    - Replies to and resolves each review thread via the GitHub API
    - Re-requests Copilot review: `gh api repos/{owner}/{repo}/pulls/{n}/requested_reviewers -X POST -f 'reviewers[]=copilot-pull-request-reviewer[bot]'`
 
-3. **Re-dispatch the polling subagent** — return to step 1.
+3. **Re-launch the background poller** — return to step 1 with a new background Bash command.
 
 4. **Terminal state:** Copilot's review says "generated no new comments" AND 0 unresolved threads → halt and await instructions.
 
