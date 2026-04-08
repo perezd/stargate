@@ -202,8 +202,7 @@ func parseGitConfigOriginURL(f *os.File) (string, bool) {
 //   - SSH URL: ssh://git@github.com[:port]/owner/repo[.git]
 func ownerFromGitURL(rawURL string) (string, bool) {
 	// SSH scp-style: git@github.com:owner/repo[.git]
-	if strings.HasPrefix(rawURL, "git@github.com:") {
-		path := strings.TrimPrefix(rawURL, "git@github.com:")
+	if path, ok := strings.CutPrefix(rawURL, "git@github.com:"); ok {
 		return ownerFromGitPath(path)
 	}
 
