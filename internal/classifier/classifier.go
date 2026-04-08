@@ -13,6 +13,7 @@ import (
 	"github.com/limbic-systems/stargate/internal/config"
 	"github.com/limbic-systems/stargate/internal/parser"
 	"github.com/limbic-systems/stargate/internal/rules"
+	"github.com/limbic-systems/stargate/internal/scopes"
 )
 
 // Classifier orchestrates the parse → rule-engine pipeline.
@@ -103,10 +104,36 @@ type CommandSummary struct {
 
 const version = "m2"
 
+// resolverAdapter wraps *scopes.ResolverRegistry to satisfy rules.ResolverProvider.
+// This avoids a circular import between rules and scopes packages.
+type resolverAdapter struct {
+	rr *scopes.ResolverRegistry
+}
+
+func (a *resolverAdapter) Get(name string) (rules.ResolverFunc, bool) {
+	r, ok := a.rr.Get(name)
+	if !ok {
+		return nil, false
+	}
+	return rules.ResolverFunc(r), ok
+}
+
 // New creates a Classifier from the given config.
 // Returns an error if the rule engine cannot be compiled.
 func New(cfg *config.Config) (*Classifier, error) {
-	eng, err := rules.NewEngine(cfg)
+	// Build scope and resolver registries for contextual trust resolution.
+	var scopeMatcher rules.ScopeMatcher
+	var resolverProvider rules.ResolverProvider
+	if len(cfg.Scopes) > 0 {
+		reg, err := scopes.NewRegistry(cfg.Scopes)
+		if err != nil {
+			return nil, fmt.Errorf("classifier: build scope registry: %w", err)
+		}
+		scopeMatcher = reg
+		resolverProvider = &resolverAdapter{rr: scopes.DefaultResolverRegistry()}
+	}
+
+	eng, err := rules.NewEngine(cfg, scopeMatcher, resolverProvider)
 	if err != nil {
 		return nil, fmt.Errorf("classifier: build engine: %w", err)
 	}
@@ -182,7 +209,7 @@ func (c *Classifier) Classify(req ClassifyRequest) *ClassifyResponse {
 	// so they fail GREEN and fall to YELLOW/default. RED rules still fire for
 	// other commands in the same input (e.g., "$(echo rm); rm -rf /").
 	rulesStart := time.Now()
-	result := c.engine.Evaluate(cmds, req.Command)
+	result := c.engine.Evaluate(cmds, req.Command, req.CWD)
 	resp.Timing.RulesUs = time.Since(rulesStart).Microseconds()
 
 	// 5. Apply unresolvable_expansion policy.
