@@ -25,6 +25,7 @@ type Classifier struct {
 	maxCmdLen    int
 	maxASTDepth  int
 	unresolvable string
+	version      string // from config, included in every response
 }
 
 // ClassifyRequest is the input to the classifier.
@@ -103,8 +104,6 @@ type CommandSummary struct {
 	Args       []string `json:"args,omitempty"`
 }
 
-const version = "m3"
-
 // resolverAdapter wraps *scopes.ResolverRegistry to satisfy rules.ResolverProvider.
 // This avoids a circular import between rules and scopes packages.
 type resolverAdapter struct {
@@ -147,6 +146,7 @@ func New(cfg *config.Config) (*Classifier, error) {
 		maxCmdLen:    cfg.Classifier.MaxCommandLength,
 		maxASTDepth:  cfg.Classifier.MaxASTDepth,
 		unresolvable: cfg.Classifier.UnresolvableExpansion,
+		version:      cfg.Version,
 	}, nil
 }
 
@@ -167,7 +167,7 @@ func (c *Classifier) Classify(ctx context.Context, req ClassifyRequest) *Classif
 		Context:      req.Context,
 		Timing:       &Timing{},
 		// AST is nil until parsing succeeds (spec: ast is null on parse failure).
-		Version: version,
+		Version: c.version,
 	}
 
 	finalize := func() *ClassifyResponse {

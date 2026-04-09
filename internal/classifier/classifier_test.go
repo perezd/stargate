@@ -14,7 +14,8 @@ import (
 func testConfig() *config.Config {
 	trueVal := true
 	return &config.Config{
-		Server: config.ServerConfig{Listen: "127.0.0.1:9099"},
+		Version: "test",
+		Server:  config.ServerConfig{Listen: "127.0.0.1:9099"},
 		Parser: config.ParserConfig{Dialect: "bash"},
 		Classifier: config.ClassifierConfig{
 			DefaultDecision:       "yellow",

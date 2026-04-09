@@ -63,6 +63,7 @@ func validateRulePattern(pattern string) error {
 
 // Config is the top-level configuration structure for stargate.
 type Config struct {
+	Version    string                    `toml:"-"` // set at startup, not from TOML
 	Server     ServerConfig              `toml:"server"`
 	Parser     ParserConfig              `toml:"parser"`
 	Classifier ClassifierConfig          `toml:"classifier"`

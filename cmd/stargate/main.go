@@ -124,6 +124,7 @@ func handleServe(args []string, configPath string, verbose bool) int {
 		fmt.Fprintf(os.Stderr, "serve: failed to load config: %v\n", err)
 		return 1
 	}
+	cfg.Version = Version
 
 	listenAddr := cfg.Server.Listen
 	if listenOverride != "" {
