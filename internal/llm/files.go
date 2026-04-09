@@ -79,21 +79,22 @@ func ResolveFiles(paths []string, cfg FileResolverConfig) []FileResult {
 			continue
 		}
 
-		// Step 5: Read file up to MaxFileSize.
-		content, truncated, err := readFile(resolved, cfg.MaxFileSize)
-		if err != nil {
-			results[i] = FileResult{Absent: true}
-			continue
-		}
-
-		// Step 6 (continued): Track cumulative bytes. If adding this file's
-		// content would exceed the budget, truncate to the remaining budget.
+		// Step 5: Read file, bounded by both per-file and remaining total budget.
+		readLimit := cfg.MaxFileSize
 		if cfg.MaxTotalFileBytes > 0 {
 			remaining := cfg.MaxTotalFileBytes - totalBytes
-			if len(content) > remaining {
-				content = content[:remaining]
-				truncated = true
+			if remaining <= 0 {
+				results[i] = FileResult{Label: label, Absent: true}
+				continue
 			}
+			if readLimit <= 0 || remaining < readLimit {
+				readLimit = remaining
+			}
+		}
+		content, truncated, err := readFile(resolved, readLimit)
+		if err != nil {
+			results[i] = FileResult{Label: label, Absent: true}
+			continue
 		}
 		totalBytes += len(content)
 
