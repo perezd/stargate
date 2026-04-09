@@ -344,6 +344,10 @@ func TestNonFenceTagsPreserved(t *testing.T) {
 		{"img self-closing", `<img src="x.png"/>`},
 		{"arbitrary tag", `<foo_bar>`},
 		{"closing arbitrary tag", `</foo_bar>`},
+		{"opening tag with fence-name prefix", `<trusted_scopesXYZ>`},
+		{"closing tag with fence-name prefix", `</trusted_scopesXYZ>`},
+		{"opening tag with fence-name prefix 2", `<untrusted_commandFoo>`},
+		{"closing tag with fence-name prefix 2", `</parsed_structureExtra>`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
