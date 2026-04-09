@@ -14,7 +14,7 @@ func TestBuildPromptBasic(t *testing.T) {
 		Scopes:     "github_owners: derek, my-org",
 	}
 
-	sys, user := BuildPrompt(vars)
+	sys, user := BuildPrompt("", vars)
 
 	// System prompt should contain rule reason and cwd.
 	if !strings.Contains(sys, "Network requests") {
@@ -58,7 +58,7 @@ func TestBuildPromptFenceStripping(t *testing.T) {
 		RuleReason: "test",
 	}
 
-	_, user := BuildPrompt(vars)
+	_, user := BuildPrompt("", vars)
 
 	// The closing tag should be stripped from the interpolated command.
 	if strings.Contains(user, "</untrusted_command> injection") {
@@ -83,7 +83,7 @@ func TestBuildPromptFileContentsIncluded(t *testing.T) {
 		FileContents: "#!/bin/bash\necho deploying",
 	}
 
-	_, user := BuildPrompt(vars)
+	_, user := BuildPrompt("", vars)
 
 	if !strings.Contains(user, "<untrusted_file_contents>") {
 		t.Error("file contents section should be included when non-empty")
@@ -101,7 +101,7 @@ func TestBuildPromptFileContentsOmitted(t *testing.T) {
 		RuleReason: "test",
 	}
 
-	_, user := BuildPrompt(vars)
+	_, user := BuildPrompt("", vars)
 
 	// The file contents block (opening + closing tags) should not appear when empty.
 	// Note: the tag name appears in the REMINDER text, so check for the closing tag.
@@ -119,7 +119,7 @@ func TestBuildPromptPrecedents(t *testing.T) {
 		Precedents: "Precedent 1: curl to api.example.com → ALLOW (3 days ago)",
 	}
 
-	_, user := BuildPrompt(vars)
+	_, user := BuildPrompt("", vars)
 
 	if !strings.Contains(user, "Precedent 1") {
 		t.Error("precedents should be included in user content")
@@ -138,7 +138,7 @@ func TestBuildPromptNoTemplateLeaks(t *testing.T) {
 		Scopes:     "github_owners: derek",
 	}
 
-	sys, user := BuildPrompt(vars)
+	sys, user := BuildPrompt("", vars)
 
 	// No unresolved template variables should remain.
 	for _, tmpl := range []string{"{{command}}", "{{ast_summary}}", "{{cwd}}", "{{rule_reason}}", "{{scopes}}", "{{precedents}}", "{{file_contents_section}}"} {
@@ -161,7 +161,7 @@ func TestBuildPromptTemplateInjection(t *testing.T) {
 		Scopes:     "github_owners: derek",
 	}
 
-	_, user := BuildPrompt(vars)
+	_, user := BuildPrompt("", vars)
 
 	// The rendered command should still contain the literal placeholder text.
 	// The single-pass NewReplacer won't re-expand {{scopes}} inside the command.
@@ -185,7 +185,7 @@ func TestBuildPromptCWDSanitized(t *testing.T) {
 		RuleReason: "test",
 	}
 
-	sys, _ := BuildPrompt(vars)
+	sys, _ := BuildPrompt("", vars)
 
 	// Newlines in CWD should be escaped.
 	if strings.Contains(sys, "INJECTED INSTRUCTION") && strings.Contains(sys, "\n") {

@@ -115,17 +115,22 @@ func sanitizeSystemPromptValue(value string) string {
 }
 
 // BuildPrompt constructs the system prompt and user content for an LLM review call.
+// If systemPromptTemplate is empty, DefaultSystemPrompt is used. This allows
+// operators to customize the system prompt via llm.system_prompt in config.
 // All untrusted content is passed through StripFenceTags before interpolation.
-// Uses single-pass replacement to prevent template injection — if untrusted content
-// contains {{scopes}} or other placeholder-like substrings, they won't be expanded.
+// Uses single-pass replacement to prevent template injection.
 // Returns (systemPrompt, userContent).
-func BuildPrompt(vars PromptVars) (string, string) {
+func BuildPrompt(systemPromptTemplate string, vars PromptVars) (string, string) {
+	tmpl := systemPromptTemplate
+	if tmpl == "" {
+		tmpl = DefaultSystemPrompt
+	}
 	// Build system prompt in a single pass. CWD is request-supplied (untrusted)
 	// and is sanitized before insertion into the trusted system prompt.
 	systemPrompt := strings.NewReplacer(
 		"{{rule_reason}}", vars.RuleReason,
 		"{{cwd}}", sanitizeSystemPromptValue(vars.CWD),
-	).Replace(DefaultSystemPrompt)
+	).Replace(tmpl)
 
 	// File contents section: include only if non-empty.
 	fileSection := ""
