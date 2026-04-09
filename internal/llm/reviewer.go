@@ -6,9 +6,11 @@ package llm
 import "context"
 
 // ReviewRequest carries structured prompt components to the provider.
-// Providers MUST keep SystemPrompt and UserContent separate:
-//   - SDK providers map them to the API's system/messages fields.
-//   - Subprocess providers concatenate them for stdin.
+// SystemPrompt and UserContent are logically distinct and MUST remain so:
+//   - SDK providers map them to the API's native system/messages fields.
+//   - Subprocess providers serialize them into a single stdin payload in
+//     deterministic order (system first, then user) with an explicit
+//     delimiter, preserving the boundary between trusted and untrusted content.
 type ReviewRequest struct {
 	SystemPrompt string  // Security instructions and decision framework
 	UserContent  string  // Untrusted data: command, AST, files, precedents, scopes
