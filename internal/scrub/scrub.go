@@ -19,15 +19,19 @@ var builtinPatternStrings = []string{
 	`ghp_[a-zA-Z0-9]{36,}`,
 	`sk-ant-[a-zA-Z0-9_-]+`,
 	`glc_[a-zA-Z0-9_-]+`,
-	`Bearer\s+[a-zA-Z0-9._\-]+`,
-	`token=[a-zA-Z0-9._\-]+`,
+	`(?i)bearer\s+[a-zA-Z0-9._\-]+`,
+	`(?i)token=[a-zA-Z0-9._\-]+`,
 	`AKIA[A-Z0-9]{16}`,
 	`npm_[a-zA-Z0-9]+`,
 	`pypi-[a-zA-Z0-9]+`,
 }
 
 // envAssignRe matches VAR=value at the start of a command or after whitespace.
-// Captures: (1) VAR= prefix, (2) value to redact.
+// Captures: (1) start-of-string or whitespace, (2) VAR= prefix, (3) value to redact.
+// Limitation: only matches unquoted single-token values. Quoted values like
+// FOO="a b" are partially matched. The AST-level CommandInfo.Env scrubbing
+// (which sees parsed key-value pairs) handles quoted assignments correctly;
+// this raw-string regex is defense-in-depth for simple cases.
 var envAssignRe = regexp.MustCompile(`(^|\s)([A-Z_][A-Z0-9_]*=)(\S+)`)
 
 // Scrubber applies secret redaction using compiled regex patterns.
