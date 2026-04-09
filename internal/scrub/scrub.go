@@ -126,9 +126,11 @@ func (s *Scrubber) scrubTokenPatterns(text string) string {
 }
 
 // urlWithUserinfoRe matches the scheme://userinfo@ portion of URLs.
-// Captures: (1) scheme://, (2) userinfo (everything before @), (3) @.
+// Captures: (1) scheme://, (2) userinfo within the authority, (3) @.
+// The userinfo capture must end before any '/', '?', or '#' so path/query/
+// fragment content like https://example.com/@user is not treated as userinfo.
 // Preserves original whitespace (does not tokenize by Fields).
-var urlWithUserinfoRe = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)([^\s@]+)(@)`)
+var urlWithUserinfoRe = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)([^\s@/?#]+)(@)`)
 
 // scrubURLCredentials strips the userinfo component from URLs per RFC 3986.
 // e.g., https://user:pass@host/path → https://[REDACTED]@host/path

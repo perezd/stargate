@@ -161,15 +161,17 @@ func TestBuildPromptTemplateInjection(t *testing.T) {
 
 	_, user := BuildPrompt(vars)
 
-	// The command should contain the literal string {{scopes}}, not "github_owners: derek".
-	if !strings.Contains(user, `\{scopes\}`) && !strings.Contains(user, "{{scopes}}") {
-		// After CWD sanitization, braces are escaped. But in user content, the
-		// single-pass NewReplacer means {{scopes}} in the command was already
-		// substituted. The key test: the scopes value should appear exactly once.
-		scopeCount := strings.Count(user, "github_owners: derek")
-		if scopeCount != 1 {
-			t.Errorf("scopes value appears %d times (want 1, template injection detected)", scopeCount)
-		}
+	// The rendered command should still contain the literal placeholder text.
+	// The single-pass NewReplacer won't re-expand {{scopes}} inside the command.
+	if !strings.Contains(user, "{{scopes}}") {
+		t.Error("rendered command does not preserve the literal {{scopes}} placeholder")
+	}
+
+	// The real scopes value should appear exactly once (from the actual scopes
+	// section only), so expansion inside the command would be caught.
+	scopeCount := strings.Count(user, "github_owners: derek")
+	if scopeCount != 1 {
+		t.Errorf("scopes value appears %d times (want 1, template injection or removal detected)", scopeCount)
 	}
 }
 

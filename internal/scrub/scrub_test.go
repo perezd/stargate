@@ -178,6 +178,16 @@ func TestScrubURLCredentials(t *testing.T) {
 			in:   "https://user@host/path",
 			want: "https://[REDACTED]@host/path",
 		},
+		{
+			name: "@ in path not treated as userinfo",
+			in:   "https://example.com/@user/profile",
+			want: "https://example.com/@user/profile",
+		},
+		{
+			name: "@ in query not treated as userinfo",
+			in:   "https://example.com/search?q=@user",
+			want: "https://example.com/search?q=@user",
+		},
 	}
 
 	for _, tc := range tests {
