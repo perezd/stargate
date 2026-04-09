@@ -269,9 +269,8 @@ func applyDefaults(cfg *Config) {
 	if cfg.LLM.MaxTotalFileBytes == 0 {
 		cfg.LLM.MaxTotalFileBytes = 131072 // 128KB
 	}
-	if cfg.LLM.MaxCallsPerMinute == 0 {
-		cfg.LLM.MaxCallsPerMinute = 30
-	}
+	// MaxCallsPerMinute defaults to 0 (unlimited). Operators set a positive
+	// value to enable rate limiting. The rate limiter treats <= 0 as disabled.
 	if cfg.Corpus.Path == "" {
 		cfg.Corpus.Path = "~/.local/share/stargate/precedents.db"
 	}

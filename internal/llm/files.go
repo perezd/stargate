@@ -44,9 +44,13 @@ func ResolveFiles(paths []string, cfg FileResolverConfig) []FileResult {
 	totalBytes := 0
 
 	for i, p := range paths {
+		// Always populate Label from the requested path (sanitized) so absent
+		// results still identify which file was unavailable in the prompt.
+		label := SanitizeFilePath(p)
+
 		// Step 1: Enforce MaxFilesPerReq cap.
 		if cfg.MaxFilesPerReq > 0 && i >= cfg.MaxFilesPerReq {
-			results[i] = FileResult{Absent: true}
+			results[i] = FileResult{Label: label, Absent: true}
 			continue
 		}
 
@@ -59,19 +63,19 @@ func ResolveFiles(paths []string, cfg FileResolverConfig) []FileResult {
 		// Step 3: Resolve symlinks — failure means Absent.
 		resolved, err := filepath.EvalSymlinks(absPath)
 		if err != nil {
-			results[i] = FileResult{Absent: true}
+			results[i] = FileResult{Label: label, Absent: true}
 			continue
 		}
 
 		// Step 4: Validate against AllowedPaths and DeniedPaths.
 		if !isAllowed(resolved, cfg) {
-			results[i] = FileResult{Absent: true}
+			results[i] = FileResult{Label: label, Absent: true}
 			continue
 		}
 
-		// Step 6: Check cumulative budget before reading.
+		// Step 5: Check cumulative budget before reading.
 		if cfg.MaxTotalFileBytes > 0 && totalBytes >= cfg.MaxTotalFileBytes {
-			results[i] = FileResult{Absent: true}
+			results[i] = FileResult{Label: label, Absent: true}
 			continue
 		}
 
@@ -142,7 +146,7 @@ func isAllowed(resolved string, cfg FileResolverConfig) bool {
 }
 
 // anchorPattern resolves a glob pattern relative to base if the pattern
-// starts with "./" or is otherwise relative (non-absolute and no "**" prefix).
+// is not absolute. All non-absolute patterns are joined with base.
 func anchorPattern(pattern, base string) string {
 	if filepath.IsAbs(pattern) {
 		return pattern

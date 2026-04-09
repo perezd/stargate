@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -134,17 +135,27 @@ func New(cfg *config.Config) (*Classifier, error) {
 
 	// Initialize LLM provider (nil if no auth available).
 	var provider llm.ReviewerProvider
-	ap := llm.NewAnthropicProvider(cfg.LLM.APIKey)
-	if ap.HasAuth() {
-		provider = ap
-		// Wrap with rate limiter if configured.
-		if cfg.LLM.MaxCallsPerMinute > 0 {
-			provider = llm.NewRateLimitedProvider(provider, cfg.LLM.MaxCallsPerMinute)
+	switch strings.ToLower(strings.TrimSpace(cfg.LLM.Provider)) {
+	case "", "anthropic":
+		ap := llm.NewAnthropicProvider(cfg.LLM.APIKey)
+		if ap.HasAuth() {
+			provider = ap
 		}
+	default:
+		return nil, fmt.Errorf("classifier: unsupported LLM provider %q", cfg.LLM.Provider)
+	}
+
+	// Wrap with rate limiter — delegates enable/disable semantics to the
+	// rate-limited provider itself (MaxCallsPerMinute <= 0 = disabled).
+	if provider != nil {
+		provider = llm.NewRateLimitedProvider(provider, cfg.LLM.MaxCallsPerMinute)
 	}
 
 	// Determine server CWD for file path anchoring.
-	cwd, _ := os.Getwd()
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("classifier: determine server working directory: %w", err)
+	}
 
 	return &Classifier{
 		engine:       eng,
@@ -300,10 +311,15 @@ func (c *Classifier) reviewWithLLM(ctx context.Context, req ClassifyRequest, cmd
 	scrubbedCmd := c.scrubber.Command(req.Command)
 	astSummary := c.buildASTTextSummary(cmds)
 
-	// Format scopes for prompt.
+	// Format scopes for prompt (sorted for deterministic ordering).
+	scopeNames := make([]string, 0, len(c.scopes))
+	for name := range c.scopes {
+		scopeNames = append(scopeNames, name)
+	}
+	slices.Sort(scopeNames)
 	var scopeLines []string
-	for name, values := range c.scopes {
-		scopeLines = append(scopeLines, name+": "+strings.Join(values, ", "))
+	for _, name := range scopeNames {
+		scopeLines = append(scopeLines, name+": "+strings.Join(c.scopes[name], ", "))
 	}
 
 	vars := llm.PromptVars{
@@ -330,7 +346,7 @@ func (c *Classifier) reviewWithLLM(ctx context.Context, req ClassifyRequest, cmd
 		if errors.Is(err, llm.ErrRateLimited) {
 			result.Reasoning = "LLM rate limit exceeded"
 		} else {
-			result.Reasoning = "LLM call failed: " + err.Error()
+			result.Reasoning = truncateReasoning("LLM call failed", c.maxReasonLen)
 		}
 		// Fail-closed: fall back to ask user.
 		return result
@@ -391,7 +407,7 @@ func (c *Classifier) reviewWithLLM(ctx context.Context, req ClassifyRequest, cmd
 	// Second LLM call.
 	llmResp2, err := c.llmProvider.Review(ctx, llmReq)
 	if err != nil {
-		result.Reasoning = "Second LLM call failed: " + err.Error()
+		result.Reasoning = truncateReasoning("Second LLM call failed", c.maxReasonLen)
 		return result
 	}
 
