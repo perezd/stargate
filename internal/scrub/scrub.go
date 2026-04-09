@@ -15,15 +15,28 @@ import (
 )
 
 // builtinPatterns are compiled once at Scrubber construction time.
-var builtinPatternStrings = []string{
-	`ghp_[a-zA-Z0-9]{36,}`,
-	`sk-ant-[a-zA-Z0-9_-]+`,
-	`glc_[a-zA-Z0-9_-]+`,
-	`(?i)bearer\s+[a-zA-Z0-9._\-]+`,
-	`(?i)token=[a-zA-Z0-9._\-]+`,
-	`AKIA[A-Z0-9]{16}`,
-	`npm_[a-zA-Z0-9]+`,
-	`pypi-[a-zA-Z0-9]+`,
+// scrubPattern pairs a regex with a replacement string.
+// Patterns may use capturing groups; the replacement can reference them
+// (e.g., "${1}[REDACTED]" to preserve a prefix like "Bearer " or "token=").
+type scrubPattern struct {
+	re   *regexp.Regexp
+	repl string
+}
+
+// builtinPatterns are compiled once at Scrubber construction time.
+// Patterns with prefixes (Bearer, token=) preserve the prefix for context.
+var builtinPatternDefs = []struct {
+	pattern string
+	repl    string
+}{
+	{`ghp_[a-zA-Z0-9]{36,}`, "[REDACTED]"},
+	{`sk-ant-[a-zA-Z0-9_-]+`, "[REDACTED]"},
+	{`glc_[a-zA-Z0-9_-]+`, "[REDACTED]"},
+	{`(?i)(bearer\s+)[a-zA-Z0-9._\-]+`, "${1}[REDACTED]"},
+	{`(?i)(token=)[a-zA-Z0-9._\-]+`, "${1}[REDACTED]"},
+	{`AKIA[A-Z0-9]{16}`, "[REDACTED]"},
+	{`npm_[a-zA-Z0-9]+`, "[REDACTED]"},
+	{`pypi-[a-zA-Z0-9]+`, "[REDACTED]"},
 }
 
 // envAssignRe matches VAR=value at the start of a command or after whitespace.
@@ -44,23 +57,27 @@ var envAssignRe = regexp.MustCompile(`(^|\s)([A-Z_][A-Z0-9_]*=)([^\s;|&()<>]+)`)
 // Scrubber applies secret redaction using compiled regex patterns.
 // It is safe for concurrent use once constructed.
 type Scrubber struct {
-	patterns []*regexp.Regexp
+	patterns []scrubPattern
 }
 
 // New creates a Scrubber with built-in patterns plus any extra patterns.
+// Extra patterns use a plain "[REDACTED]" replacement (no prefix preservation).
 // Returns an error if any extra pattern fails to compile.
 func New(extraPatterns []string) (*Scrubber, error) {
-	all := make([]string, 0, len(builtinPatternStrings)+len(extraPatterns))
-	all = append(all, builtinPatternStrings...)
-	all = append(all, extraPatterns...)
-
-	compiled := make([]*regexp.Regexp, 0, len(all))
-	for _, p := range all {
+	compiled := make([]scrubPattern, 0, len(builtinPatternDefs)+len(extraPatterns))
+	for _, def := range builtinPatternDefs {
+		re, err := regexp.Compile(def.pattern)
+		if err != nil {
+			return nil, fmt.Errorf("scrub: invalid builtin pattern %q: %w", def.pattern, err)
+		}
+		compiled = append(compiled, scrubPattern{re: re, repl: def.repl})
+	}
+	for _, p := range extraPatterns {
 		re, err := regexp.Compile(p)
 		if err != nil {
 			return nil, fmt.Errorf("scrub: invalid pattern %q: %w", p, err)
 		}
-		compiled = append(compiled, re)
+		compiled = append(compiled, scrubPattern{re: re, repl: "[REDACTED]"})
 	}
 	return &Scrubber{patterns: compiled}, nil
 }
@@ -132,8 +149,8 @@ func (s *Scrubber) scrubEnvAssigns(text string) string {
 
 // scrubTokenPatterns applies all compiled regex patterns.
 func (s *Scrubber) scrubTokenPatterns(text string) string {
-	for _, re := range s.patterns {
-		text = re.ReplaceAllString(text, "[REDACTED]")
+	for _, p := range s.patterns {
+		text = p.re.ReplaceAllString(text, p.repl)
 	}
 	return text
 }

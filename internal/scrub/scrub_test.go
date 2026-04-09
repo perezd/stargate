@@ -114,13 +114,13 @@ func TestScrubTokenPatterns(t *testing.T) {
 			name:    "Bearer token",
 			in:      "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9",
 			wantSub: "eyJhbGciOiJIUzI1NiJ9",
-			want:    "Authorization: [REDACTED]",
+			want:    "Authorization: Bearer [REDACTED]",
 		},
 		{
 			name:    "token= assignment",
 			in:      "--token=mysecretvalue123",
 			wantSub: "mysecretvalue123",
-			want:    "--[REDACTED]",
+			want:    "--token=[REDACTED]",
 		},
 		{
 			name:    "AWS access key AKIA",
