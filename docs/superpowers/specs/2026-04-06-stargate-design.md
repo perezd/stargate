@@ -768,12 +768,17 @@ extra_patterns = [
 # "</untrusted_</untrusted_command>command>") survive a single-pass strip.
 #
 # Stripping is case-insensitive and handles whitespace variants (e.g.,
-# </ untrusted_command>, < trusted_scopes >).
+# </ untrusted_command>, < trusted_scopes >). The regex pattern matches
+# tags with arbitrary attributes: `<\s*/?\s*TAGNAME[^>]*>` — this ensures
+# attribute-bearing variants like `<trusted_scopes class="x">` are also
+# stripped, preventing an attacker from surviving stripping by adding
+# attributes to injected tags.
 #
 # Unicode confusable normalization: before stripping, a targeted replacement
 # table normalizes known confusables of <, /, > characters:
 #   - Fullwidth forms: U+FF1C (<), U+FF0F (/), U+FF1E (>)
 #   - Mathematical angle brackets: U+27E8 (⟨), U+27E9 (⟩)
+#   - Small form variants: U+FE64 (﹤), U+FE65 (﹥)
 #   - Other common confusables: U+2039 (‹), U+203A (›), U+2215 (∕)
 # This is a targeted replacement table (not a full Unicode confusable library)
 # — sufficient for the three characters that matter for XML tag syntax.
