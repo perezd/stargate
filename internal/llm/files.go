@@ -128,11 +128,12 @@ func isAllowed(resolved string, cfg FileResolverConfig) bool {
 		return false
 	}
 
-	// Must not match any denied pattern.
+	// Must not match any denied pattern. Invalid deny patterns fail closed
+	// (treated as denying) to prevent misconfigured globs from allowing reads.
 	for _, pattern := range cfg.DeniedPaths {
 		pat := anchorPattern(pattern, cfg.ServerCWD)
 		matched, err := doublestar.Match(pat, resolved)
-		if err == nil && matched {
+		if err != nil || matched {
 			return false
 		}
 	}
