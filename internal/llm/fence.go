@@ -49,14 +49,15 @@ var unicodeConfusables = strings.NewReplacer(
 )
 
 // fenceTagRegexps are compiled regexes for each fence tag name.
-// Pattern: <\s*/?\s*TAGNAME[^>]*> — matches both opening and closing tags,
-// with optional attributes, case-insensitive, whitespace-tolerant.
+// Pattern requires exact tag name match (not prefix) — <trusted_scopesXYZ>
+// would NOT match. The (?:\s|/?>|$) boundary ensures the tag name ends at
+// whitespace, closing slash, >, or end of string.
 var fenceTagRegexps []*regexp.Regexp
 
 func init() {
 	fenceTagRegexps = make([]*regexp.Regexp, len(fenceTagNames))
 	for i, name := range fenceTagNames {
-		pattern := `(?i)<\s*/?\s*` + regexp.QuoteMeta(name) + `[^>]*>`
+		pattern := `(?i)<\s*/?\s*` + regexp.QuoteMeta(name) + `(?:\s[^>]*)?\s*/?>`
 		fenceTagRegexps[i] = regexp.MustCompile(pattern)
 	}
 }

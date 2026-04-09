@@ -9,9 +9,7 @@ package scrub
 
 import (
 	"fmt"
-	"net/url"
 	"regexp"
-	"strings"
 
 	"github.com/limbic-systems/stargate/internal/types"
 )
@@ -96,10 +94,13 @@ func (s *Scrubber) CommandInfo(cmd types.CommandInfo) types.CommandInfo {
 		}
 	}
 
-	// Deep copy Flags (not redacted — flags don't contain secrets).
+	// Deep copy and redact Flags — flag tokens may include inline values
+	// (e.g., --token=ghp_abc, -HAuthorization:Bearer...) that contain secrets.
 	if len(cmd.Flags) > 0 {
 		out.Flags = make([]string, len(cmd.Flags))
-		copy(out.Flags, cmd.Flags)
+		for i, flag := range cmd.Flags {
+			out.Flags[i] = s.Text(flag)
+		}
 	}
 
 	// Deep copy Redirects.
@@ -124,27 +125,14 @@ func (s *Scrubber) scrubTokenPatterns(text string) string {
 	return text
 }
 
+// urlWithUserinfoRe matches the scheme://userinfo@ portion of URLs.
+// Captures: (1) scheme://, (2) userinfo (everything before @), (3) @.
+// Preserves original whitespace (does not tokenize by Fields).
+var urlWithUserinfoRe = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)([^\s@]+)(@)`)
+
 // scrubURLCredentials strips the userinfo component from URLs per RFC 3986.
 // e.g., https://user:pass@host/path → https://[REDACTED]@host/path
+// Preserves original whitespace.
 func (s *Scrubber) scrubURLCredentials(text string) string {
-	// Split on whitespace to find URL-like tokens.
-	words := strings.Fields(text)
-	changed := false
-	for i, word := range words {
-		// Quick check: must contain :// and @ to have userinfo.
-		if !strings.Contains(word, "://") || !strings.Contains(word, "@") {
-			continue
-		}
-		u, err := url.Parse(word)
-		if err != nil || u.User == nil {
-			continue
-		}
-		u.User = url.User("[REDACTED]")
-		words[i] = u.String()
-		changed = true
-	}
-	if !changed {
-		return text
-	}
-	return strings.Join(words, " ")
+	return urlWithUserinfoRe.ReplaceAllString(text, "${1}[REDACTED]${3}")
 }

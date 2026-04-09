@@ -151,8 +151,7 @@ func TestScrubURLCredentials(t *testing.T) {
 		{
 			name: "https URL with userinfo",
 			in:   "https://user:pass@host/path",
-			// net/url percent-encodes [ and ] in the userinfo component
-			want: "https://%5BREDACTED%5D@host/path",
+			want: "https://[REDACTED]@host/path",
 		},
 		{
 			name: "URL without userinfo unchanged",
@@ -162,22 +161,22 @@ func TestScrubURLCredentials(t *testing.T) {
 		{
 			name: "multiple URLs in one string",
 			in:   "clone https://alice:secret@github.com/org/repo and https://bob:hunter2@gitlab.com/foo/bar",
-			want: "clone https://%5BREDACTED%5D@github.com/org/repo and https://%5BREDACTED%5D@gitlab.com/foo/bar",
+			want: "clone https://[REDACTED]@github.com/org/repo and https://[REDACTED]@gitlab.com/foo/bar",
 		},
 		{
 			name: "non-HTTP scheme ftp with userinfo",
 			in:   "ftp://user:pass@ftp.example.com/file.txt",
-			want: "ftp://%5BREDACTED%5D@ftp.example.com/file.txt",
+			want: "ftp://[REDACTED]@ftp.example.com/file.txt",
 		},
 		{
 			name: "URL without credentials mixed with credentialed URL",
 			in:   "git clone https://user:tok@host/repo && cd repo",
-			want: "git clone https://%5BREDACTED%5D@host/repo && cd repo",
+			want: "git clone https://[REDACTED]@host/repo && cd repo",
 		},
 		{
 			name: "URL with username but no password",
 			in:   "https://user@host/path",
-			want: "https://%5BREDACTED%5D@host/path",
+			want: "https://[REDACTED]@host/path",
 		},
 	}
 
@@ -238,7 +237,7 @@ func TestScrubCommandInfo(t *testing.T) {
 	original := types.CommandInfo{
 		Name:       "curl",
 		Args:       []string{"https://api.github.com", "Bearer eyJtoken123"},
-		Flags:      []string{"-H", "--silent"},
+		Flags:      []string{"-H", "--silent", "--token=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij"},
 		Subcommand: "",
 		Env: map[string]string{
 			"GITHUB_TOKEN": "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
@@ -275,14 +274,20 @@ func TestScrubCommandInfo(t *testing.T) {
 		}
 	})
 
-	t.Run("flags untouched", func(t *testing.T) {
+	t.Run("flags scrubbed", func(t *testing.T) {
 		if len(result.Flags) != len(original.Flags) {
 			t.Fatalf("Flags length mismatch: got %d, want %d", len(result.Flags), len(original.Flags))
 		}
-		for i, f := range result.Flags {
-			if f != original.Flags[i] {
-				t.Errorf("Flags[%d] = %q, want %q", i, f, original.Flags[i])
-			}
+		// Non-secret flags should be unchanged.
+		if result.Flags[0] != "-H" {
+			t.Errorf("Flags[0] = %q, want -H", result.Flags[0])
+		}
+		if result.Flags[1] != "--silent" {
+			t.Errorf("Flags[1] = %q, want --silent", result.Flags[1])
+		}
+		// Secret-bearing flag should be scrubbed.
+		if strings.Contains(result.Flags[2], "ghp_") {
+			t.Errorf("Flags[2] still contains secret: %q", result.Flags[2])
 		}
 	})
 
@@ -351,8 +356,7 @@ func TestScrubText(t *testing.T) {
 		if strings.Contains(got, "pass") {
 			t.Errorf("Text(%q) still contains password: %q", in, got)
 		}
-		// net/url percent-encodes [ and ] in userinfo, so expect encoded form
-		if !strings.Contains(got, "%5BREDACTED%5D@example.com") {
+		if !strings.Contains(got, "[REDACTED]@example.com") {
 			t.Errorf("Text(%q) missing redacted URL: %q", in, got)
 		}
 	})

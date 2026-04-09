@@ -97,32 +97,48 @@ type PromptVars struct {
 	Scopes       string // Formatted scope entries
 }
 
+// sanitizeSystemPromptValue escapes untrusted values before insertion into
+// the trusted system prompt. Strips fence tags and escapes characters that
+// could change prompt structure (newlines, template delimiters).
+func sanitizeSystemPromptValue(value string) string {
+	value = StripFenceTags(value)
+	value = strings.ReplaceAll(value, "\r", "\\r")
+	value = strings.ReplaceAll(value, "\n", "\\n")
+	value = strings.ReplaceAll(value, "{", "\\{")
+	value = strings.ReplaceAll(value, "}", "\\}")
+	return value
+}
+
 // BuildPrompt constructs the system prompt and user content for an LLM review call.
 // All untrusted content is passed through StripFenceTags before interpolation.
+// Uses single-pass replacement to prevent template injection — if untrusted content
+// contains {{scopes}} or other placeholder-like substrings, they won't be expanded.
 // Returns (systemPrompt, userContent).
 func BuildPrompt(vars PromptVars) (string, string) {
-	// Build the system prompt — only rule_reason and cwd are interpolated.
-	// rule_reason comes from stargate.toml (trusted), cwd from the request.
-	systemPrompt := DefaultSystemPrompt
-	systemPrompt = strings.ReplaceAll(systemPrompt, "{{rule_reason}}", vars.RuleReason)
-	systemPrompt = strings.ReplaceAll(systemPrompt, "{{cwd}}", vars.CWD)
-
-	// Build user content — all untrusted data goes through fence stripping.
-	userContent := userContentTemplate
-	userContent = strings.ReplaceAll(userContent, "{{command}}", StripFenceTags(vars.Command))
-	userContent = strings.ReplaceAll(userContent, "{{ast_summary}}", StripFenceTags(vars.ASTSummary))
-	userContent = strings.ReplaceAll(userContent, "{{precedents}}", StripFenceTags(vars.Precedents))
-	userContent = strings.ReplaceAll(userContent, "{{scopes}}", StripFenceTags(vars.Scopes))
+	// Build system prompt in a single pass. CWD is request-supplied (untrusted)
+	// and is sanitized before insertion into the trusted system prompt.
+	systemPrompt := strings.NewReplacer(
+		"{{rule_reason}}", vars.RuleReason,
+		"{{cwd}}", sanitizeSystemPromptValue(vars.CWD),
+	).Replace(DefaultSystemPrompt)
 
 	// File contents section: include only if non-empty.
+	fileSection := ""
 	if vars.FileContents != "" {
-		fileSection := "### File Contents (if requested)\n<untrusted_file_contents>\n" +
+		fileSection = "### File Contents (if requested)\n<untrusted_file_contents>\n" +
 			StripFenceTags(vars.FileContents) +
 			"\n</untrusted_file_contents>\n"
-		userContent = strings.ReplaceAll(userContent, "{{file_contents_section}}", fileSection)
-	} else {
-		userContent = strings.ReplaceAll(userContent, "{{file_contents_section}}", "")
 	}
+
+	// Build user content in a single pass from the original template so
+	// placeholder-like substrings inside untrusted content cannot be re-expanded.
+	userContent := strings.NewReplacer(
+		"{{command}}", StripFenceTags(vars.Command),
+		"{{ast_summary}}", StripFenceTags(vars.ASTSummary),
+		"{{precedents}}", StripFenceTags(vars.Precedents),
+		"{{scopes}}", StripFenceTags(vars.Scopes),
+		"{{file_contents_section}}", fileSection,
+	).Replace(userContentTemplate)
 
 	return systemPrompt, userContent
 }
