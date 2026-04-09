@@ -307,7 +307,13 @@ func (c *Classifier) Classify(ctx context.Context, req ClassifyRequest) *Classif
 // reviewWithLLM runs the LLM review pipeline: scrub → prompt → call → (files → call).
 func (c *Classifier) reviewWithLLM(ctx context.Context, req ClassifyRequest, cmds []rules.CommandInfo, resp *ClassifyResponse) *LLMReviewResult {
 	llmStart := time.Now()
-	result := &LLMReviewResult{Performed: true, Rounds: 1}
+	result := &LLMReviewResult{
+		Performed:      true,
+		Rounds:         1,
+		RiskFactors:    []string{},
+		FilesRequested: []string{},
+		FilesInspected: []string{},
+	}
 
 	defer func() {
 		result.DurationMs = float64(time.Since(llmStart).Microseconds()) / 1000
