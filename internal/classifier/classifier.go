@@ -352,11 +352,12 @@ func (c *Classifier) reviewWithLLM(ctx context.Context, req ClassifyRequest, cmd
 		return result
 	}
 
-	// If verdict, we're done.
+	// If verdict, we're done. Scrub reasoning/risk_factors — the LLM may
+	// echo secrets from the command or file contents in its response.
 	if len(llmResp.RequestFiles) == 0 {
 		result.Decision = llmResp.Decision
-		result.Reasoning = truncateReasoning(llmResp.Reasoning, c.maxReasonLen)
-		result.RiskFactors = llmResp.RiskFactors
+		result.Reasoning = truncateReasoning(c.scrubber.Text(llmResp.Reasoning), c.maxReasonLen)
+		result.RiskFactors = c.scrubRiskFactors(llmResp.RiskFactors)
 		return result
 	}
 
@@ -366,7 +367,7 @@ func (c *Classifier) reviewWithLLM(ctx context.Context, req ClassifyRequest, cmd
 	if !c.llmCfg.AllowFileRetrieval {
 		// File retrieval disabled — return first-call response, no second call.
 		result.Decision = llmResp.Decision
-		result.Reasoning = truncateReasoning(llmResp.Reasoning, c.maxReasonLen)
+		result.Reasoning = truncateReasoning(c.scrubber.Text(llmResp.Reasoning), c.maxReasonLen)
 		return result
 	}
 
@@ -420,9 +421,21 @@ func (c *Classifier) reviewWithLLM(ctx context.Context, req ClassifyRequest, cmd
 	}
 
 	result.Decision = llmResp2.Decision
-	result.Reasoning = truncateReasoning(llmResp2.Reasoning, c.maxReasonLen)
-	result.RiskFactors = llmResp2.RiskFactors
+	result.Reasoning = truncateReasoning(c.scrubber.Text(llmResp2.Reasoning), c.maxReasonLen)
+	result.RiskFactors = c.scrubRiskFactors(llmResp2.RiskFactors)
 	return result
+}
+
+// scrubRiskFactors runs each risk factor through the secret scrubber.
+func (c *Classifier) scrubRiskFactors(factors []string) []string {
+	if factors == nil {
+		return nil
+	}
+	out := make([]string, len(factors))
+	for i, f := range factors {
+		out[i] = c.scrubber.Text(f)
+	}
+	return out
 }
 
 // buildASTTextSummary produces a human-readable text summary of the AST
