@@ -70,10 +70,11 @@ func (s *Scrubber) Command(raw string) string {
 }
 
 // Text redacts secrets in arbitrary text (e.g., file contents, LLM reasoning).
-// Applies token patterns and URL credential scrubbing (not env assigns, since
-// the text may not be a command).
+// Applies env var redaction (covers .env files, configs), token patterns, and
+// URL credential scrubbing.
 func (s *Scrubber) Text(text string) string {
-	result := s.scrubTokenPatterns(text)
+	result := s.scrubEnvAssigns(text)
+	result = s.scrubTokenPatterns(result)
 	result = s.scrubURLCredentials(result)
 	return result
 }

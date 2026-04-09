@@ -231,6 +231,31 @@ func TestValidation(t *testing.T) {
 			toml:    "[log]\nformat = \"xml\"",
 			wantErr: "log.format",
 		},
+		{
+			name:    "negative llm.max_files_per_request",
+			toml:    "[llm]\nmax_files_per_request = -1",
+			wantErr: "llm.max_files_per_request",
+		},
+		{
+			name:    "negative llm.max_total_file_bytes",
+			toml:    "[llm]\nmax_total_file_bytes = -1",
+			wantErr: "llm.max_total_file_bytes",
+		},
+		{
+			name:    "negative llm.max_calls_per_minute",
+			toml:    "[llm]\nmax_calls_per_minute = -1",
+			wantErr: "llm.max_calls_per_minute",
+		},
+		{
+			name:    "negative corpus.max_writes_per_minute",
+			toml:    "[corpus]\nmax_writes_per_minute = -1",
+			wantErr: "corpus.max_writes_per_minute",
+		},
+		{
+			name:    "negative corpus.max_reasoning_length",
+			toml:    "[corpus]\nmax_reasoning_length = -1",
+			wantErr: "corpus.max_reasoning_length",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

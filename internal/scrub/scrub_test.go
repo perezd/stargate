@@ -371,12 +371,15 @@ func TestScrubText(t *testing.T) {
 		}
 	})
 
-	t.Run("env assigns NOT applied by Text", func(t *testing.T) {
-		// VAR=value should NOT be redacted by Text (only by Command).
+	t.Run("env assigns applied by Text for file contents", func(t *testing.T) {
+		// VAR=value in .env files/configs should be redacted by Text.
 		in := "SOME_VAR=plainvalue"
 		got := s.Text(in)
-		if got != in {
-			t.Errorf("Text(%q) should not redact env assigns, got %q", in, got)
+		if got == in {
+			t.Errorf("Text(%q) should redact env assigns, got %q", in, got)
+		}
+		if got != "SOME_VAR=[REDACTED]" {
+			t.Errorf("Text(%q) = %q, want SOME_VAR=[REDACTED]", in, got)
 		}
 	})
 
