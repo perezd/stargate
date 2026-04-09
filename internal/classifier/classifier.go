@@ -15,7 +15,6 @@ import (
 	"github.com/limbic-systems/stargate/internal/config"
 	"github.com/limbic-systems/stargate/internal/parser"
 	"github.com/limbic-systems/stargate/internal/rules"
-	"github.com/limbic-systems/stargate/internal/scopes"
 )
 
 // Classifier orchestrates the parse → rule-engine pipeline.
@@ -108,18 +107,7 @@ type CommandSummary struct {
 // New creates a Classifier from the given config.
 // Returns an error if the rule engine cannot be compiled.
 func New(cfg *config.Config) (*Classifier, error) {
-	// Build scope and resolver registries for contextual trust resolution.
-	// Always create registries even when no scopes are configured — an empty
-	// registry is valid and causes resolve rules to fail the Has check at
-	// engine validation time (a clear config error), rather than panicking.
-	reg, err := scopes.NewRegistry(cfg.Scopes)
-	if err != nil {
-		return nil, fmt.Errorf("classifier: build scope registry: %w", err)
-	}
-	var scopeMatcher rules.ScopeMatcher = reg
-	var resolverProvider rules.ResolverProvider = scopes.NewResolverAdapter(scopes.DefaultResolverRegistry())
-
-	eng, err := rules.NewEngine(cfg, scopeMatcher, resolverProvider)
+	eng, err := rules.NewEngine(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("classifier: build engine: %w", err)
 	}

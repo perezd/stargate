@@ -7,39 +7,6 @@ import (
 	"github.com/limbic-systems/stargate/internal/config"
 )
 
-// mockScopeMatcher implements ScopeMatcher for tests.
-type mockScopeMatcher struct {
-	scopes map[string][]string
-}
-
-func (m *mockScopeMatcher) Has(name string) bool {
-	_, ok := m.scopes[name]
-	return ok
-}
-
-func (m *mockScopeMatcher) Match(scopeName, value string) bool {
-	patterns, ok := m.scopes[scopeName]
-	if !ok {
-		return false
-	}
-	for _, p := range patterns {
-		if p == value {
-			return true
-		}
-	}
-	return false
-}
-
-// mockResolverProvider implements ResolverProvider for tests.
-type mockResolverProvider struct {
-	resolvers map[string]ResolverFunc
-}
-
-func (m *mockResolverProvider) Get(name string) (ResolverFunc, bool) {
-	fn, ok := m.resolvers[name]
-	return fn, ok
-}
-
 // boolPtr is a helper to create a *bool for llm_review fields.
 func boolPtr(b bool) *bool { return &b }
 
@@ -60,12 +27,22 @@ func testConfig(red, green, yellow []config.Rule, defaultDecision string) *confi
 	}
 }
 
+// testConfigWithScopes builds a minimal config with the given rules, default
+// decision, and scope patterns for resolve rule tests.
+func testConfigWithScopes(green []config.Rule, scopes map[string][]string) *config.Config {
+	return &config.Config{
+		Classifier: config.ClassifierConfig{DefaultDecision: "yellow"},
+		Scopes:     scopes,
+		Rules:      config.RulesConfig{Green: green},
+	}
+}
+
 func TestNewEngine_Validation(t *testing.T) {
 	t.Run("rejects rule with both command and commands", func(t *testing.T) {
 		cfg := testConfig([]config.Rule{
 			{Command: "rm", Commands: []string{"rm", "del"}, Reason: "bad rule"},
 		}, nil, nil, "")
-		_, err := NewEngine(cfg, nil, nil)
+		_, err := NewEngine(cfg)
 		if err == nil {
 			t.Fatal("expected error for rule with both command and commands set")
 		}
@@ -75,7 +52,7 @@ func TestNewEngine_Validation(t *testing.T) {
 		cfg := testConfig([]config.Rule{
 			{Pattern: "[invalid", Reason: "bad regex"},
 		}, nil, nil, "")
-		_, err := NewEngine(cfg, nil, nil)
+		_, err := NewEngine(cfg)
 		if err == nil {
 			t.Fatal("expected error for invalid regex pattern")
 		}
@@ -87,7 +64,7 @@ func TestNewEngine_Validation(t *testing.T) {
 			[]config.Rule{{Command: "ls", Reason: "safe"}},
 			nil, "",
 		)
-		e, err := NewEngine(cfg, nil, nil)
+		e, err := NewEngine(cfg)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -107,7 +84,7 @@ func TestEvaluate_RedMatching(t *testing.T) {
 		{Command: "ls", Reason: "safe list"},
 	}
 	cfg := testConfig(redRules, greenRules, nil, "")
-	engine, err := NewEngine(cfg, nil, nil)
+	engine, err := NewEngine(cfg)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
@@ -203,7 +180,7 @@ func TestEvaluate_GreenMatching(t *testing.T) {
 		{Command: "grep", Reason: "safe grep"},
 	}
 	cfg := testConfig(nil, greenRules, nil, "")
-	engine, err := NewEngine(cfg, nil, nil)
+	engine, err := NewEngine(cfg)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
@@ -277,7 +254,7 @@ func TestEvaluate_YellowMatching(t *testing.T) {
 		{Command: "kill", LLMReview: boolPtr(false), Reason: "signal send"},
 	}
 	cfg := testConfig(nil, nil, yellowRules, "yellow")
-	engine, err := NewEngine(cfg, nil, nil)
+	engine, err := NewEngine(cfg)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
@@ -346,7 +323,7 @@ func TestFlagNormalization(t *testing.T) {
 		{Command: "curl", Flags: []string{"--output"}, LLMReview: boolPtr(true), Reason: "curl output"},
 	}
 	cfg := testConfig(redRules, nil, yellowRules, "")
-	engine, err := NewEngine(cfg, nil, nil)
+	engine, err := NewEngine(cfg)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
@@ -409,7 +386,7 @@ func TestArgsGlobMatching(t *testing.T) {
 
 	t.Run("rm /etc/passwd matches /etc/*", func(t *testing.T) {
 		cfg := testConfig(redRules, nil, nil, "")
-		engine, _ := NewEngine(cfg, nil, nil)
+		engine, _ := NewEngine(cfg)
 		result := engine.Evaluate(context.Background(), 
 			[]CommandInfo{{Name: "rm", Args: []string{"/etc/passwd"}}},
 			"rm /etc/passwd",
@@ -422,7 +399,7 @@ func TestArgsGlobMatching(t *testing.T) {
 
 	t.Run("rm /etc/ssh/config does NOT match /etc/* (no recursive)", func(t *testing.T) {
 		cfg := testConfig(redRules, nil, nil, "")
-		engine, _ := NewEngine(cfg, nil, nil)
+		engine, _ := NewEngine(cfg)
 		result := engine.Evaluate(context.Background(), 
 			[]CommandInfo{{Name: "rm", Args: []string{"/etc/ssh/config"}}},
 			"rm /etc/ssh/config",
@@ -435,7 +412,7 @@ func TestArgsGlobMatching(t *testing.T) {
 
 	t.Run("rm /etc/ssh/config matches /etc/** (doublestar recursive)", func(t *testing.T) {
 		cfg := testConfig(redRulesRecursive, nil, nil, "")
-		engine, _ := NewEngine(cfg, nil, nil)
+		engine, _ := NewEngine(cfg)
 		result := engine.Evaluate(context.Background(), 
 			[]CommandInfo{{Name: "rm", Args: []string{"/etc/ssh/config"}}},
 			"rm /etc/ssh/config",
@@ -452,7 +429,7 @@ func TestScopeMatching(t *testing.T) {
 		{Command: "chown", Scope: "/etc", Reason: "chown in /etc"},
 	}
 	cfg := testConfig(redRules, nil, nil, "")
-	engine, err := NewEngine(cfg, nil, nil)
+	engine, err := NewEngine(cfg)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
@@ -504,7 +481,7 @@ func TestScopeMatching(t *testing.T) {
 			[]config.Rule{{Command: "chown", Scope: "/", Reason: "chown anywhere"}},
 			nil, nil, "",
 		)
-		rootEngine, _ := NewEngine(rootCfg, nil, nil)
+		rootEngine, _ := NewEngine(rootCfg)
 		result := rootEngine.Evaluate(context.Background(), 
 			[]CommandInfo{{Name: "chown", Args: []string{"/etc/passwd"}}},
 			"chown /etc/passwd",
@@ -529,7 +506,7 @@ func TestContextMatching(t *testing.T) {
 		{Command: "echo", Context: "any", Reason: "echo anywhere"},
 	}
 	cfg := testConfig(redRules, nil, nil, "")
-	engine, err := NewEngine(cfg, nil, nil)
+	engine, err := NewEngine(cfg)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
@@ -612,7 +589,7 @@ func TestPatternMatching(t *testing.T) {
 		{Pattern: `curl.*\|.*bash`, Reason: "curl pipe bash"},
 	}
 	cfg := testConfig(redRules, nil, nil, "")
-	engine, err := NewEngine(cfg, nil, nil)
+	engine, err := NewEngine(cfg)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
@@ -645,7 +622,7 @@ func TestPatternMatching(t *testing.T) {
 				{Command: "curl", Pattern: `https://evil\.com`, Reason: "evil curl"},
 			}, nil, nil, "",
 		)
-		engine2, _ := NewEngine(cfg2, nil, nil)
+		engine2, _ := NewEngine(cfg2)
 
 		// Both match
 		result := engine2.Evaluate(context.Background(), 
@@ -689,7 +666,7 @@ func TestPipelineEvaluation(t *testing.T) {
 		{Pattern: `curl.*\|.*bash`, Reason: "curl pipe bash"},
 	}
 	cfg := testConfig(redRules, greenRules, nil, "")
-	engine, err := NewEngine(cfg, nil, nil)
+	engine, err := NewEngine(cfg)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
@@ -750,7 +727,7 @@ func TestPipelineEvaluation(t *testing.T) {
 
 func TestDefaultDecision(t *testing.T) {
 	cfg := testConfig(nil, nil, nil, "yellow")
-	engine, err := NewEngine(cfg, nil, nil)
+	engine, err := NewEngine(cfg)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
@@ -773,7 +750,7 @@ func TestCommandsField(t *testing.T) {
 		{Commands: []string{"rm", "rmdir", "unlink"}, Flags: []string{"-rf"}, Reason: "destructive delete"},
 	}
 	cfg := testConfig(redRules, nil, nil, "")
-	engine, err := NewEngine(cfg, nil, nil)
+	engine, err := NewEngine(cfg)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
@@ -817,7 +794,7 @@ func TestNonDecomposableFlags(t *testing.T) {
 		{Command: "gcc", Flags: []string{"-o"}, Reason: "output flag"},
 	}
 	cfg := testConfig(redRules, nil, nil, "")
-	engine, err := NewEngine(cfg, nil, nil)
+	engine, err := NewEngine(cfg)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
@@ -867,7 +844,7 @@ func TestNonDecomposableFlags(t *testing.T) {
 
 func TestEmptyCmds(t *testing.T) {
 	cfg := testConfig(nil, nil, nil, "yellow")
-	engine, err := NewEngine(cfg, nil, nil)
+	engine, err := NewEngine(cfg)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
@@ -883,7 +860,7 @@ func TestMatchedCommandInfo(t *testing.T) {
 		{Command: "rm", Flags: []string{"-rf"}, Reason: "dangerous"},
 	}
 	cfg := testConfig(redRules, nil, nil, "")
-	engine, _ := NewEngine(cfg, nil, nil)
+	engine, _ := NewEngine(cfg)
 
 	cmds := []CommandInfo{
 		{Name: "echo", Args: []string{"hello"}},
@@ -906,7 +883,7 @@ func TestSubcommandMatching(t *testing.T) {
 		{Command: "git", Subcommands: []string{"status", "log"}, Reason: "safe git read"},
 	}
 	cfg := testConfig(nil, greenRules, nil, "")
-	engine, _ := NewEngine(cfg, nil, nil)
+	engine, _ := NewEngine(cfg)
 
 	t.Run("git status matches", func(t *testing.T) {
 		result := engine.Evaluate(context.Background(), 
@@ -949,7 +926,7 @@ func TestResultActions(t *testing.T) {
 		[]config.Rule{{Command: "curl", LLMReview: boolPtr(true), Reason: "review it"}},
 		"",
 	)
-	engine, _ := NewEngine(cfg, nil, nil)
+	engine, _ := NewEngine(cfg)
 
 	t.Run("red has action=block", func(t *testing.T) {
 		r := engine.Evaluate(context.Background(), []CommandInfo{{Name: "rm"}}, "rm", "")
@@ -974,37 +951,21 @@ func TestResultActions(t *testing.T) {
 }
 
 func TestResolveMatchesTrustedScope(t *testing.T) {
-	sm := &mockScopeMatcher{scopes: map[string][]string{
-		"github_owners": {"derek"},
-	}}
-	rp := &mockResolverProvider{resolvers: map[string]ResolverFunc{
-		"github_repo_owner": func(_ context.Context, cmd CommandInfo, _ string) (string, bool, error) {
-			// Extract owner from --repo=owner/repo flag.
-			for _, f := range cmd.Flags {
-				if len(f) > 7 && f[:7] == "--repo=" {
-					parts := f[7:]
-					if idx := indexOf(parts, '/'); idx >= 0 {
-						return parts[:idx], true, nil
-					}
-				}
-			}
-			return "", false, nil
-		},
-	}}
-
-	cfg := testConfig(nil, []config.Rule{
-		{
+	// Uses the built-in github_repo_owner resolver and a real scope registry.
+	cfg := testConfigWithScopes(
+		[]config.Rule{{
 			Command: "gh",
 			Resolve: &config.ResolveConfig{Resolver: "github_repo_owner", Scope: "github_owners"},
 			Reason:  "trusted gh",
-		},
-	}, nil, "")
-	engine, err := NewEngine(cfg, sm, rp)
+		}},
+		map[string][]string{"github_owners": {"derek"}},
+	)
+	engine, err := NewEngine(cfg)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
 
-	result := engine.Evaluate(context.Background(), 
+	result := engine.Evaluate(context.Background(),
 		[]CommandInfo{{Name: "gh", Subcommand: "pr", Flags: []string{"--repo=derek/stargate"}}},
 		"gh pr list --repo=derek/stargate",
 		"",
@@ -1015,36 +976,20 @@ func TestResolveMatchesTrustedScope(t *testing.T) {
 }
 
 func TestResolveRejectsUntrustedScope(t *testing.T) {
-	sm := &mockScopeMatcher{scopes: map[string][]string{
-		"github_owners": {"derek"},
-	}}
-	rp := &mockResolverProvider{resolvers: map[string]ResolverFunc{
-		"github_repo_owner": func(_ context.Context, cmd CommandInfo, _ string) (string, bool, error) {
-			for _, f := range cmd.Flags {
-				if len(f) > 7 && f[:7] == "--repo=" {
-					parts := f[7:]
-					if idx := indexOf(parts, '/'); idx >= 0 {
-						return parts[:idx], true, nil
-					}
-				}
-			}
-			return "", false, nil
-		},
-	}}
-
-	cfg := testConfig(nil, []config.Rule{
-		{
+	cfg := testConfigWithScopes(
+		[]config.Rule{{
 			Command: "gh",
 			Resolve: &config.ResolveConfig{Resolver: "github_repo_owner", Scope: "github_owners"},
 			Reason:  "trusted gh",
-		},
-	}, nil, "")
-	engine, err := NewEngine(cfg, sm, rp)
+		}},
+		map[string][]string{"github_owners": {"derek"}},
+	)
+	engine, err := NewEngine(cfg)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
 
-	result := engine.Evaluate(context.Background(), 
+	result := engine.Evaluate(context.Background(),
 		[]CommandInfo{{Name: "gh", Subcommand: "pr", Flags: []string{"--repo=evil-org/repo"}}},
 		"gh pr list --repo=evil-org/repo",
 		"",
@@ -1055,29 +1000,21 @@ func TestResolveRejectsUntrustedScope(t *testing.T) {
 }
 
 func TestResolveUnresolvable(t *testing.T) {
-	sm := &mockScopeMatcher{scopes: map[string][]string{
-		"github_owners": {"derek"},
-	}}
-	rp := &mockResolverProvider{resolvers: map[string]ResolverFunc{
-		"github_repo_owner": func(_ context.Context, cmd CommandInfo, _ string) (string, bool, error) {
-			// No --repo flag → unresolvable.
-			return "", false, nil
-		},
-	}}
-
-	cfg := testConfig(nil, []config.Rule{
-		{
+	// No --repo flag in the command → resolver returns ok=false → fail-closed.
+	cfg := testConfigWithScopes(
+		[]config.Rule{{
 			Command: "gh",
 			Resolve: &config.ResolveConfig{Resolver: "github_repo_owner", Scope: "github_owners"},
 			Reason:  "trusted gh",
-		},
-	}, nil, "")
-	engine, err := NewEngine(cfg, sm, rp)
+		}},
+		map[string][]string{"github_owners": {"derek"}},
+	)
+	engine, err := NewEngine(cfg)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
 
-	result := engine.Evaluate(context.Background(), 
+	result := engine.Evaluate(context.Background(),
 		[]CommandInfo{{Name: "gh", Subcommand: "pr"}},
 		"gh pr list",
 		"",
@@ -1091,53 +1028,33 @@ func TestResolveUnresolvable(t *testing.T) {
 }
 
 func TestResolveUndefinedScope(t *testing.T) {
-	sm := &mockScopeMatcher{scopes: map[string][]string{
-		"github_owners": {"derek"},
-	}}
-	rp := &mockResolverProvider{resolvers: map[string]ResolverFunc{
-		"github_repo_owner": func(_ context.Context, _ CommandInfo, _ string) (string, bool, error) {
-			return "derek", true, nil
-		},
-	}}
-
-	cfg := testConfig(nil, []config.Rule{
-		{
+	// Rule references a scope that is not defined in cfg.Scopes — engine must error.
+	cfg := testConfigWithScopes(
+		[]config.Rule{{
 			Command: "gh",
 			Resolve: &config.ResolveConfig{Resolver: "github_repo_owner", Scope: "nonexistent"},
 			Reason:  "bad scope ref",
-		},
-	}, nil, "")
-	_, err := NewEngine(cfg, sm, rp)
+		}},
+		map[string][]string{"github_owners": {"derek"}}, // "nonexistent" is absent
+	)
+	_, err := NewEngine(cfg)
 	if err == nil {
 		t.Fatal("expected error for undefined scope, got nil")
 	}
 }
 
 func TestResolveUndefinedResolver(t *testing.T) {
-	sm := &mockScopeMatcher{scopes: map[string][]string{
-		"github_owners": {"derek"},
-	}}
-	rp := &mockResolverProvider{resolvers: map[string]ResolverFunc{}}
-
-	cfg := testConfig(nil, []config.Rule{
-		{
+	// Rule references a resolver name not in DefaultResolverRegistry — engine must error.
+	cfg := testConfigWithScopes(
+		[]config.Rule{{
 			Command: "gh",
-			Resolve: &config.ResolveConfig{Resolver: "nonexistent", Scope: "github_owners"},
+			Resolve: &config.ResolveConfig{Resolver: "nonexistent_resolver", Scope: "github_owners"},
 			Reason:  "bad resolver ref",
-		},
-	}, nil, "")
-	_, err := NewEngine(cfg, sm, rp)
+		}},
+		map[string][]string{"github_owners": {"derek"}},
+	)
+	_, err := NewEngine(cfg)
 	if err == nil {
 		t.Fatal("expected error for undefined resolver, got nil")
 	}
-}
-
-// indexOf returns the index of the first occurrence of sep in s, or -1.
-func indexOf(s string, sep byte) int {
-	for i := range len(s) {
-		if s[i] == sep {
-			return i
-		}
-	}
-	return -1
 }

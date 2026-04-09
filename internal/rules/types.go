@@ -13,3 +13,15 @@ type RedirectInfo = types.RedirectInfo
 
 // CommandContext describes where a command appears in the AST structure.
 type CommandContext = types.CommandContext
+
+// ScopeMatcher matches resolved values against operator-defined scopes.
+// Aliased from types so callers can continue using rules.ScopeMatcher.
+type ScopeMatcher = types.ScopeMatcher
+
+// ResolverFunc extracts a target value from a command for scope matching.
+// Aliased from types so callers can continue using rules.ResolverFunc.
+type ResolverFunc = types.ResolverFunc
+
+// ResolverProvider looks up named resolvers.
+// Aliased from types so callers can continue using rules.ResolverProvider.
+type ResolverProvider = types.ResolverProvider

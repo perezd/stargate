@@ -11,24 +11,8 @@ import (
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/limbic-systems/stargate/internal/config"
+	"github.com/limbic-systems/stargate/internal/scopes"
 )
-
-// ScopeMatcher matches resolved values against operator-defined scopes.
-// Implemented by *scopes.Registry.
-type ScopeMatcher interface {
-	Match(scopeName, value string) bool
-	Has(scopeName string) bool
-}
-
-// ResolverFunc extracts a target value from a command for scope matching.
-// This mirrors scopes.Resolver but is defined here to avoid a circular import.
-type ResolverFunc func(ctx context.Context, cmd CommandInfo, cwd string) (value string, ok bool, err error)
-
-// ResolverProvider looks up named resolvers.
-// Implemented by adapter wrapping *scopes.ResolverRegistry.
-type ResolverProvider interface {
-	Get(name string) (ResolverFunc, bool)
-}
 
 // Engine evaluates commands against compiled classification rules.
 type Engine struct {
@@ -66,13 +50,11 @@ type MatchedRule struct {
 }
 
 // NewEngine compiles rules from config and returns an Engine.
-// scopeMatcher and resolverProvider enable contextual trust resolution for
-// rules with a resolve field. If any rule has a resolve field and either
-// dependency is nil, NewEngine returns an error.
-// Also returns an error if any rule has both command and commands set,
+// It builds the scope registry and resolver infrastructure internally from cfg.
+// Returns an error if any rule has both command and commands set,
 // if a regex pattern fails to compile, or if a rule references an
 // undefined scope or resolver.
-func NewEngine(cfg *config.Config, scopeMatcher ScopeMatcher, resolverProvider ResolverProvider) (*Engine, error) {
+func NewEngine(cfg *config.Config) (*Engine, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("rules: config must not be nil")
 	}
@@ -84,13 +66,22 @@ func NewEngine(cfg *config.Config, scopeMatcher ScopeMatcher, resolverProvider R
 	if !validDecisions[defDecision] {
 		return nil, fmt.Errorf("rules: invalid default_decision %q", defDecision)
 	}
+
+	// Build scope registry from config. Always construct even when no scopes are
+	// configured — an empty registry causes resolve rules to fail the Has check at
+	// validation time (a clear config error), rather than panicking.
+	scopeReg, err := scopes.NewRegistry(cfg.Scopes)
+	if err != nil {
+		return nil, fmt.Errorf("rules: build scope registry: %w", err)
+	}
+	resolverProv := scopes.NewResolverAdapter(scopes.DefaultResolverRegistry())
+
 	e := &Engine{
 		defaultDecision:  defDecision,
-		scopeMatcher:     scopeMatcher,
-		resolverProvider: resolverProvider,
+		scopeMatcher:     scopeReg,
+		resolverProvider: resolverProv,
 	}
 
-	var err error
 	if e.red, err = compileRules(cfg.Rules.Red, "red"); err != nil {
 		return nil, err
 	}
@@ -113,13 +104,10 @@ func NewEngine(cfg *config.Config, scopeMatcher ScopeMatcher, resolverProvider R
 			if cr.rule.Resolve == nil {
 				continue
 			}
-			if scopeMatcher == nil || resolverProvider == nil {
-				return nil, fmt.Errorf("rules.%s[%d]: rule has resolve but no scope matcher or resolver provider configured", group.level, cr.index)
-			}
-			if !scopeMatcher.Has(cr.rule.Resolve.Scope) {
+			if !scopeReg.Has(cr.rule.Resolve.Scope) {
 				return nil, fmt.Errorf("rules.%s[%d]: resolve references undefined scope %q", group.level, cr.index, cr.rule.Resolve.Scope)
 			}
-			if _, ok := resolverProvider.Get(cr.rule.Resolve.Resolver); !ok {
+			if _, ok := resolverProv.Get(cr.rule.Resolve.Resolver); !ok {
 				return nil, fmt.Errorf("rules.%s[%d]: resolve references undefined resolver %q", group.level, cr.index, cr.rule.Resolve.Resolver)
 			}
 		}

@@ -3,7 +3,11 @@
 // allows other packages to import it without creating circular imports.
 package types
 
-import "mvdan.cc/sh/v3/syntax"
+import (
+	"context"
+
+	"mvdan.cc/sh/v3/syntax"
+)
 
 // CommandInfo represents a single command invocation extracted from the AST.
 type CommandInfo struct {
@@ -31,4 +35,20 @@ type CommandContext struct {
 	InCondition      bool   // Inside if/while test
 	InFunction       string // Name of enclosing function, if any
 	ParentOperator   string // "&&", "||", ";", "|", "|&"
+}
+
+// ScopeMatcher matches resolved values against operator-defined scopes.
+// Implemented by *scopes.Registry.
+type ScopeMatcher interface {
+	Match(scopeName, value string) bool
+	Has(scopeName string) bool
+}
+
+// ResolverFunc extracts a target value from a command for scope matching.
+type ResolverFunc func(ctx context.Context, cmd CommandInfo, cwd string) (value string, ok bool, err error)
+
+// ResolverProvider looks up named resolvers.
+// Implemented by scopes.ResolverAdapter wrapping *scopes.ResolverRegistry.
+type ResolverProvider interface {
+	Get(name string) (ResolverFunc, bool)
 }
