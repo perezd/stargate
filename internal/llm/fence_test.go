@@ -285,18 +285,19 @@ func TestAllFenceTagNames(t *testing.T) {
 }
 
 func TestIterationBound(t *testing.T) {
-	t.Run("deeply nested input terminates", func(t *testing.T) {
+	t.Run("deeply nested input terminates and fails closed", func(t *testing.T) {
 		// Build input with more nesting levels than maxTagStripIterations (10).
-		// The function must terminate regardless of remaining tags.
 		base := "untrusted_command"
 		input := "</" + base + ">"
 		// Wrap 15 times — exceeds the 10-iteration limit.
 		for range 15 {
 			input = "</" + "untrusted_" + input + "command>"
 		}
-		// Must not hang; just verify it returns.
 		got := StripFenceTags(input)
-		_ = got // result may be non-empty at pathological depth, but must return
+		// Must not contain any raw < or > — fail-closed escapes them.
+		if strings.Contains(got, "<") || strings.Contains(got, ">") {
+			t.Errorf("fail-closed violation: output contains raw angle brackets: %q", got)
+		}
 	})
 
 	t.Run("exactly maxTagStripIterations nesting levels strips fully", func(t *testing.T) {

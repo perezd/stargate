@@ -69,18 +69,26 @@ func StripFenceTags(content string) string {
 	// Normalize Unicode confusables first.
 	content = unicodeConfusables.Replace(content)
 
+	lastChanged := false
 	for range maxTagStripIterations {
-		changed := false
+		lastChanged = false
 		for _, re := range fenceTagRegexps {
 			next := re.ReplaceAllString(content, "")
 			if next != content {
-				changed = true
+				lastChanged = true
 				content = next
 			}
 		}
-		if !changed {
+		if !lastChanged {
 			break
 		}
+	}
+
+	// Fail closed: if we exhausted iterations and tags are still being found,
+	// escape all < and > so no residual fence tag can cause a breakout.
+	if lastChanged {
+		content = strings.ReplaceAll(content, "<", "\\x3C")
+		content = strings.ReplaceAll(content, ">", "\\x3E")
 	}
 	return content
 }
