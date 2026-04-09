@@ -105,6 +105,15 @@ func parseURLDomain(raw string) (string, bool) {
 		return "", false
 	}
 
+	// Validate port if present — reject non-numeric ports (fail-closed).
+	if port := u.Port(); port != "" {
+		for _, c := range port {
+			if c < '0' || c > '9' {
+				return "", false
+			}
+		}
+	}
+
 	// u.Hostname() correctly strips brackets from IPv6 literals like [::1]
 	// and strips the port if present.
 	host := strings.ToLower(u.Hostname())

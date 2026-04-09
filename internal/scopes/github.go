@@ -30,13 +30,13 @@ var validGitHubName = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 func ResolveGitHubRepoOwner(ctx context.Context, cmd rules.CommandInfo, cwd string) (string, bool, error) {
 	// Step 1: Check flags for --repo=owner/repo or -R=owner/repo.
 	if owner, ok := ownerFromRepoFlag(cmd.Flags); ok {
-		return owner, true, nil
+		return strings.ToLower(owner), true, nil
 	}
 
 	// Step 2: Check args for gh api repos/owner/repo/... path.
 	owner, ok, sawReposPath := ownerFromAPIPath(cmd.Args)
 	if ok {
-		return owner, true, nil
+		return strings.ToLower(owner), true, nil
 	}
 	// If we found a repos/ path but couldn't parse it safely (traversal,
 	// invalid chars), do NOT fall back to .git/config — the command is
@@ -51,7 +51,7 @@ func ResolveGitHubRepoOwner(ctx context.Context, cmd rules.CommandInfo, cwd stri
 		return "", false, fmt.Errorf("github_repo_owner: git config: %w", err)
 	}
 	if ok {
-		return owner, true, nil
+		return strings.ToLower(owner), true, nil
 	}
 
 	return "", false, nil
