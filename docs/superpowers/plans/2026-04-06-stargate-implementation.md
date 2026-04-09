@@ -1379,7 +1379,7 @@ git commit -m "feat(rules): integrate scope-bound rule matching via resolvers"
 
 ## M4: LLM Review
 
-Goal: Provider interface, Anthropic implementation, prompt templating, file retrieval, secret scrubbing.
+Goal: Provider interface, Anthropic implementation, prompt templating with XML fence security, file retrieval, secret scrubbing. Incorporates all findings from 3 rounds of expert panel review.
 
 ### Task 4.1: Secret scrubbing
 
@@ -1387,41 +1387,118 @@ Goal: Provider interface, Anthropic implementation, prompt templating, file retr
 - Create: `internal/scrub/scrub.go`
 - Create: `internal/scrub/scrub_test.go`
 
-> **Note:** The spec's §12 project structure does not list `internal/scrub/` — this is a plan improvement that separates scrubbing into its own reusable package rather than embedding it in the LLM package.
+> **Note:** Scrubbing is its own reusable package — used by both the LLM prompt builder and corpus storage.
 
 - [ ] **Step 1: Write failing tests**
 
 ```go
 func TestScrubEnvVars(t *testing.T) {
 	result := scrub.Command("GITHUB_TOKEN=ghp_abc123 curl https://api.github.com")
-	if strings.Contains(result, "ghp_abc123") {
-		t.Error("env var value should be redacted")
-	}
-	if !strings.Contains(result, "GITHUB_TOKEN=[REDACTED]") {
-		t.Error("should contain redacted placeholder")
-	}
+	assert(!strings.Contains(result, "ghp_abc123"), "env var value should be redacted")
+	assert(strings.Contains(result, "GITHUB_TOKEN=[REDACTED]"), "should contain redacted placeholder")
 }
 
 func TestScrubTokenPatterns(t *testing.T) {
-	result := scrub.Command("curl -H 'Authorization: Bearer sk-ant-abc123def' https://api.anthropic.com")
-	if strings.Contains(result, "sk-ant-abc123def") {
-		t.Error("token should be redacted")
+	// ghp_, sk-ant-, glc_, Bearer, token=, AKIA, npm_, pypi-
+	patterns := map[string]string{
+		"ghp_abc123def456":                    "ghp_",
+		"sk-ant-abc123def":                    "sk-ant-",
+		"Bearer sk-ant-abc123def":             "Bearer",
+		"token=abc123def456":                  "token=",
+		"AKIAIOSFODNN7EXAMPLE":                "AKIA",
 	}
+	for input, name := range patterns {
+		result := scrub.Command("curl -H '" + input + "' https://api.example.com")
+		assert(!strings.Contains(result, input), name + " should be redacted")
+	}
+}
+
+func TestScrubURLCredentials(t *testing.T) {
+	// RFC 3986 userinfo scrubbing
+	result := scrub.Command("curl https://user:s3cret@api.example.com/data")
+	assert(!strings.Contains(result, "s3cret"), "URL password should be redacted")
+	assert(strings.Contains(result, "[REDACTED]@api.example.com"), "should preserve host")
+}
+
+func TestScrubExtraPatterns(t *testing.T) {
+	s := scrub.New([]string{`my-org-token-[a-zA-Z0-9]+`})
+	result := s.Command("curl -H 'X-Token: my-org-token-abc123' https://internal.api")
+	assert(!strings.Contains(result, "my-org-token-abc123"), "extra pattern should match")
 }
 ```
 
 - [ ] **Step 2: Implement scrubber**
 
-`scrub.Command(raw string) string` — applies env var redaction and regex patterns for `ghp_`, `sk-ant-`, `glc_`, `Bearer`, `token=`, plus configurable `extra_patterns`. Also `scrub.CommandInfo(info *rules.CommandInfo)` that redacts `Env` values and args matching patterns.
+`scrub.New(extraPatterns []string) *Scrubber` — compiles built-in + extra regex patterns once. Returns error if any pattern fails to compile.
+
+`(s *Scrubber) Command(raw string) string` — applies:
+1. Env var value redaction (`VAR=value` → `VAR=[REDACTED]`)
+2. Token regex patterns (ghp_, sk-ant-, glc_, Bearer, token=, AKIA, npm_, pypi-)
+3. URL credential scrubbing (RFC 3986 userinfo: `user:pass@host` → `[REDACTED]@host`) via `net/url.Parse` on URL-like args
+4. Configurable extra_patterns
+
+`(s *Scrubber) CommandInfo(info *types.CommandInfo) *types.CommandInfo` — returns a deep copy with `Env` values and matching args redacted.
+
+`(s *Scrubber) Text(text string) string` — applies token patterns + URL credential scrubbing to arbitrary text (used for file contents and LLM reasoning).
 
 - [ ] **Step 3: Run tests, commit**
 
 ```bash
 git add internal/scrub/
-git commit -m "feat(scrub): add secret scrubbing for commands before LLM/corpus"
+git commit -m "feat(scrub): secret scrubbing with env vars, tokens, URL credentials, extra patterns"
 ```
 
-### Task 4.2: LLM provider interface and prompt builder
+### Task 4.2: XML fence escaping
+
+**Files:**
+- Create: `internal/llm/fence.go`
+- Create: `internal/llm/fence_test.go`
+
+> **Panel requirement:** Iterative stripping of both opening AND closing tags, with attribute handling and Unicode confusable normalization.
+
+- [ ] **Step 1: Write failing tests**
+
+```go
+// Basic closing tag stripping
+func TestStripClosingTag(t *testing.T) { ... }
+// Opening tag stripping
+func TestStripOpeningTag(t *testing.T) { ... }
+// Tags with attributes: <trusted_scopes class="x">
+func TestStripTagWithAttributes(t *testing.T) { ... }
+// Recursive: </untrusted_</untrusted_command>command> → empty after iterative strip
+func TestRecursiveTagStripping(t *testing.T) { ... }
+// Case insensitive: </UNTRUSTED_COMMAND>
+func TestCaseInsensitive(t *testing.T) { ... }
+// Whitespace variants: </ untrusted_command >, < trusted_scopes >
+func TestWhitespaceVariants(t *testing.T) { ... }
+// Unicode confusables: fullwidth <／untrusted_command＞
+func TestUnicodeConfusables(t *testing.T) { ... }
+// Iteration bound: max 10 iterations, then stop
+func TestIterationBound(t *testing.T) { ... }
+// All 5 fence tag names covered
+func TestAllFenceTagNames(t *testing.T) { ... }
+```
+
+- [ ] **Step 2: Implement fence escaping**
+
+`StripFenceTags(content string) string`:
+- Fence tag names: `untrusted_command`, `untrusted_file_contents`, `parsed_structure`, `precedent_context`, `trusted_scopes`
+- Unicode confusable replacement table (applied first):
+  - Fullwidth: U+FF1C→<, U+FF0F→/, U+FF1E→>
+  - Math angle: U+27E8→<, U+27E9→>
+  - Small form: U+FE64→<, U+FE65→>
+  - Other: U+2039→<, U+203A→>, U+2215→/
+- Regex per tag name: `(?i)<\s*/?\s*TAGNAME[^>]*>` (handles both opening/closing, attributes, whitespace)
+- Apply iteratively until no matches, max `maxTagStripIterations = 10`
+
+- [ ] **Step 3: Run tests, commit**
+
+```bash
+git add internal/llm/fence.go internal/llm/fence_test.go
+git commit -m "feat(llm): iterative XML fence tag stripping with Unicode confusable normalization"
+```
+
+### Task 4.3: LLM provider interface and prompt builder
 
 **Files:**
 - Create: `internal/llm/reviewer.go`
@@ -1430,41 +1507,51 @@ git commit -m "feat(scrub): add secret scrubbing for commands before LLM/corpus"
 
 - [ ] **Step 1: Write failing tests for prompt building**
 
-Test that the prompt template correctly interpolates `{{command}}` (scrubbed, XML-fenced), `{{ast_summary}}`, `{{cwd}}`, `{{rule_reason}}`, `{{scopes}}`, `{{precedents}}`, `{{file_contents}}`. Test that XML closing tags in command text are stripped. Test that empty optional sections are omitted.
+Test that:
+- `{{command}}` is scrubbed and XML-fenced
+- `{{ast_summary}}`, `{{cwd}}`, `{{rule_reason}}`, `{{scopes}}`, `{{precedents}}`, `{{file_contents}}` interpolate correctly
+- All fence tags are stripped from interpolated content via `StripFenceTags`
+- Empty optional sections (file_contents, precedents) are omitted
+- Sandwich reminder appears after untrusted blocks, before Decision Criteria
+- File path labels show only basename + parent dir (e.g., `scripts/deploy.sh`)
 
 - [ ] **Step 2: Implement provider interface and prompt builder**
 
 `internal/llm/reviewer.go`:
 ```go
-type ReviewerProvider interface {
-    Review(ctx context.Context, req ReviewRequest) (ReviewResponse, error)
-}
-
+// ReviewRequest carries structured prompt components — providers MUST keep
+// SystemPrompt and UserContent separate (SDK → system/messages fields,
+// subprocess → concatenated on stdin).
 type ReviewRequest struct {
-    Prompt    string
-    Model     string
-    MaxTokens int
-    Temp      float64
+    SystemPrompt string    // Security instructions and decision framework
+    UserContent  string    // Untrusted data: command, AST, files, precedents, scopes
+    Model        string
+    MaxTokens    int
+    Temperature  float64
 }
 
 type ReviewResponse struct {
-    Decision    string   // "allow" or "deny"
-    Reasoning   string
-    RiskFactors []string
+    Decision     string   // "allow" or "deny"
+    Reasoning    string
+    RiskFactors  []string
     RequestFiles []string // non-empty = file request, not verdict
+}
+
+type ReviewerProvider interface {
+    Review(ctx context.Context, req ReviewRequest) (ReviewResponse, error)
 }
 ```
 
-`internal/llm/prompt.go`: `BuildPrompt(template string, vars PromptVars) string`. `PromptVars` holds all template variables. XML-fence all untrusted variables. Strip closing tags from content before interpolation. Scrub command before interpolation.
+`internal/llm/prompt.go`: `BuildPrompt(template string, vars PromptVars) (systemPrompt, userContent string)`. Returns two strings — the system prompt (everything before/after untrusted blocks including decision criteria) and user content (the fenced untrusted data). `PromptVars` holds all template variables. Apply `StripFenceTags` to all interpolated content. Apply scrubber to command, file contents, and AST summary before interpolation. File path labels: `filepath.Join(filepath.Base(filepath.Dir(p)), filepath.Base(p))`.
 
 - [ ] **Step 3: Run tests, commit**
 
 ```bash
 git add internal/llm/
-git commit -m "feat(llm): add provider interface and prompt builder with XML-fencing"
+git commit -m "feat(llm): provider interface and prompt builder with structured system/user split"
 ```
 
-### Task 4.3: Anthropic provider implementation
+### Task 4.4: Anthropic provider implementation
 
 **Files:**
 - Create: `internal/llm/anthropic.go`
@@ -1472,20 +1559,45 @@ git commit -m "feat(llm): add provider interface and prompt builder with XML-fen
 
 - [ ] **Step 1: Write tests with mock HTTP server**
 
-Test the Anthropic provider: successful allow, successful deny, file request response, malformed response → deny, timeout → error. Use `httptest.NewServer` to mock the Anthropic API.
+Test the Anthropic provider:
+- Successful allow/deny
+- File request response
+- Malformed response → action "review" (ask user)
+- Type mismatches in response: null decision, array decision, numeric decision, nested JSON in reasoning, empty object, missing fields (all → "review")
+- Timeout → error
+- SDK path: system prompt maps to `system` field, user content maps to `messages`
 
 - [ ] **Step 2: Implement Anthropic provider**
 
-Two auth paths: direct API key (via Anthropic Go SDK) and OAuth token (via `claude -p` subprocess). Auth resolution: API key → `ANTHROPIC_API_KEY` env → `CLAUDE_CODE_OAUTH_TOKEN` env. Parse JSON response strictly — reject unknown fields, handle `request_files` vs `decision` responses.
+**Auth resolution order:**
+1. `llm.api_key` config field or `ANTHROPIC_API_KEY` env → direct SDK path
+2. `CLAUDE_CODE_OAUTH_TOKEN` env → `exec.LookPath("claude")` check → subprocess path
+3. Neither available → return error (caller disables LLM review with logged warning)
+
+**SDK path:** Use `anthropic-sdk-go`. Map `ReviewRequest.SystemPrompt` to the API's `system` parameter, `ReviewRequest.UserContent` to `messages[0].content`. Parse response via strict Go struct unmarshalling.
+
+**Subprocess path:**
+- `exec.CommandContext(ctx, "claude", "-p", "--model", model, "--max-turns", "1", "-")`
+- `cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }`
+- `cmd.WaitDelay = 3 * time.Second`
+- Prompt piped via `cmd.Stdin` (SystemPrompt + "\n\n" + UserContent)
+- Stderr: `io.LimitReader(cmd.StderrPipe(), 4096)` in goroutine, joined via `sync.WaitGroup`
+- Per-process deadline as safety net independent of parent context
+
+**Response parsing (both paths):**
+- Unmarshal into strict Go struct with exact types
+- `json.Decoder.DisallowUnknownFields()` — unknown fields logged as warnings
+- Type mismatches → error → action "review"
+- `decision` must be exactly `"allow"` or `"deny"` — anything else → action "review"
 
 - [ ] **Step 3: Run tests, commit**
 
 ```bash
 git add internal/llm/
-git commit -m "feat(llm): add Anthropic provider with dual auth (API key + OAuth)"
+git commit -m "feat(llm): Anthropic provider with dual auth, graceful subprocess shutdown"
 ```
 
-### Task 4.4: File retrieval with path validation
+### Task 4.5: File retrieval with path validation
 
 **Files:**
 - Create: `internal/llm/files.go`
@@ -1493,20 +1605,104 @@ git commit -m "feat(llm): add Anthropic provider with dual auth (API key + OAuth
 
 - [ ] **Step 1: Write failing tests**
 
-Test: allowed path succeeds, denied path returns denied, path outside allowed_paths returns denied, symlink resolution (use `O_NOFOLLOW` semantics), file exceeding max_file_size returns truncated preview, missing file returns absent notice.
+Test:
+- Allowed path succeeds
+- Denied path returns absent (not denied — no info leak)
+- Path outside allowed_paths returns absent
+- Symlink resolution via `filepath.EvalSymlinks` — symlink to denied path → absent
+- Symlink resolution failure → absent
+- File exceeding `max_file_size` returns truncated preview
+- `max_files_per_request` cap (excess files silently skipped)
+- `max_total_file_bytes` cap (remaining files reported absent after budget exhausted)
+- `allowed_paths` resolved against server CWD (not request CWD)
+- File contents scrubbed via scrubber before return
+- Missing file returns absent notice
+- `doublestar.Match` for `**` glob patterns in allowed/denied paths
 
 - [ ] **Step 2: Implement file resolver**
 
-`ResolveFiles(paths []string, allowedPaths, deniedPaths []string, maxSize int) []FileResult`. Each `FileResult`: `Path`, `Content`, `Size`, `Truncated bool`, `Denied bool`, `Absent bool`.
+```go
+type FileResolverConfig struct {
+    AllowedPaths     []string // glob patterns, anchored to ServerCWD
+    DeniedPaths      []string // glob patterns
+    MaxFileSize      int
+    MaxFilesPerReq   int
+    MaxTotalFileBytes int
+    ServerCWD        string   // anchor for relative allowed_paths, set at startup
+    Scrubber         *scrub.Scrubber
+}
+
+type FileResult struct {
+    Label     string // sanitized: basename + parent dir only
+    FullPath  string // for files_inspected in API response
+    Content   string // scrubbed
+    Truncated bool
+    Absent    bool
+}
+
+func ResolveFiles(paths []string, cfg FileResolverConfig) []FileResult
+```
+
+Per file: `filepath.EvalSymlinks` → resolve relative `allowed_paths` against `cfg.ServerCWD` → `doublestar.Match` for validation → read up to `MaxFileSize` → accumulate against `MaxTotalFileBytes` → scrub content → sanitize label to `parent/basename`.
 
 - [ ] **Step 3: Run tests, commit**
 
 ```bash
 git add internal/llm/
-git commit -m "feat(llm): add file retrieval with path validation and size limits"
+git commit -m "feat(llm): file retrieval with symlink resolution, path validation, scrubbing"
 ```
 
-### Task 4.5: Wire LLM review into classifier
+### Task 4.6: LLM rate limiter
+
+**Files:**
+- Create: `internal/llm/ratelimit.go`
+- Create: `internal/llm/ratelimit_test.go`
+
+> **Panel requirement:** Configurable rate limit on LLM calls to prevent cost explosion and abuse.
+
+- [ ] **Step 1: Write failing tests**
+
+Test: calls within limit succeed, calls exceeding limit return error, burst allowance works.
+
+- [ ] **Step 2: Implement rate limiter**
+
+Use `golang.org/x/time/rate`. `rate.NewLimiter(rate.Limit(float64(maxCallsPerMin)/60.0), burstSize)` with burst of 5 (allows short bursts while maintaining the per-minute average). The `Reviewer` wraps the provider with a rate check — if `limiter.Allow()` returns false, return a sentinel error that the classifier maps to YELLOW (ask user) without LLM review. Set to 0 for unlimited (limiter disabled).
+
+- [ ] **Step 3: Run tests, commit**
+
+```bash
+git add internal/llm/
+git commit -m "feat(llm): add rate limiter for LLM calls (max_calls_per_minute)"
+```
+
+### Task 4.7: Config additions for M4
+
+**Files:**
+- Modify: `internal/config/config.go`
+
+- [ ] **Step 1: Add new config fields**
+
+Add to `LLMConfig`:
+- `MaxFilesPerRequest int` (default 3)
+- `MaxTotalFileBytes int` (default 131072)
+- `MaxCallsPerMinute int` (default 30)
+
+Add to `CorpusConfig`:
+- `MaxWritesPerMinute int` (default 10)
+- `MaxReasoningLength int` (default 1000)
+
+Add validation:
+- All numeric fields >= 0
+- `extra_patterns` must compile as valid regex
+
+- [ ] **Step 2: Run tests, commit**
+
+```bash
+git add internal/config/
+git commit -m "feat(config): add M4 config fields (file limits, rate limits, reasoning cap)"
+```
+
+### Task 4.8: Wire LLM review into classifier
 
 **Files:**
 - Modify: `internal/classifier/classifier.go`
@@ -1514,17 +1710,35 @@ git commit -m "feat(llm): add file retrieval with path validation and size limit
 
 - [ ] **Step 1: Write tests**
 
-Test the full pipeline with a mock LLM provider: YELLOW command with `llm_review=true` → LLM returns allow → action is "allow". LLM returns deny → action is "block". LLM returns file request → second call with file contents → final verdict. LLM timeout → fallback to action "review" (ask user). Two-call max enforcement.
+Test the full pipeline with a mock LLM provider:
+- YELLOW command with `llm_review=true` → LLM returns allow → action "allow"
+- LLM returns deny → action "block"
+- LLM returns file request → second call with file contents → final verdict
+- LLM returns second file request → treated as deny (two-call max)
+- LLM timeout → fallback to action "review" (ask user)
+- LLM rate limit exceeded → fallback to action "review" (ask user)
+- Malformed LLM response → action "review"
+- `max_response_reasoning_length` truncation in API response
+- Scrubbed command in LLM prompt (not original)
 
 - [ ] **Step 2: Integrate LLM into classifier pipeline**
 
-After YELLOW rule match with `llm_review=true`: scrub command → build prompt (with scopes) → call LLM → if file request, resolve files, rebuild prompt, call again → map response to action. Respect `max_response_reasoning_length` for API response truncation.
+After YELLOW rule match with `llm_review=true`:
+1. Scrub command and CommandInfo
+2. Build prompt (system + user content, with scopes from config)
+3. Check rate limiter → if exhausted, return YELLOW/review
+4. First LLM call
+5. Parse response → if verdict, proceed to step 8
+6. If file request: resolve files (with server CWD anchor), rebuild user content with `{{file_contents}}`
+7. Second LLM call → if another file request, treat as deny
+8. Map response to action. Truncate reasoning to `max_response_reasoning_length` for API response
+9. Return (corpus write deferred to M5)
 
 - [ ] **Step 3: Run tests, commit**
 
 ```bash
 git add internal/classifier/
-git commit -m "feat(classifier): integrate LLM review with file retrieval and scrubbing"
+git commit -m "feat(classifier): integrate LLM review with rate limiting, file retrieval, scrubbing"
 ```
 
 ---
