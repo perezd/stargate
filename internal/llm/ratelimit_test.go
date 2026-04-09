@@ -40,9 +40,9 @@ func TestRateLimitWithinBudget(t *testing.T) {
 
 func TestRateLimitExceeded(t *testing.T) {
 	stub := &stubProvider{resp: ReviewResponse{Decision: "allow"}}
-	// 60 calls/min → burst 5. After 5 calls, the bucket is empty and the 6th
-	// call must be rejected without waiting.
-	p := NewRateLimitedProvider(stub, 60)
+	// 1 call/min → burst 5. Very low refill rate ensures no token arrives during
+	// the test loop, making the 6th call reliably rejected.
+	p := NewRateLimitedProvider(stub, 1)
 
 	for i := 0; i < 5; i++ {
 		if _, err := p.Review(context.Background(), ReviewRequest{}); err != nil {

@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"errors"
 	"testing"
 )
 
@@ -137,9 +136,6 @@ func TestNewAnthropicProvider_ReviewWithoutAuth(t *testing.T) {
 	p := NewAnthropicProvider("")
 	_, err := p.Review(t.Context(), ReviewRequest{})
 	if err == nil {
-		t.Error("expected error when no auth available")
-	}
-	if !errors.Is(err, err) { // sanity
-		t.Error("error should be non-nil")
+		t.Fatal("expected error when no auth available")
 	}
 }

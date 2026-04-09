@@ -53,6 +53,9 @@ func (p *AnthropicProvider) Review(ctx context.Context, req ReviewRequest) (Revi
 	if oauthToken == "" {
 		return ReviewResponse{}, fmt.Errorf("llm: no API key or OAuth token available")
 	}
+	if !HasCLI() {
+		return ReviewResponse{}, fmt.Errorf("llm: CLAUDE_CODE_OAUTH_TOKEN set but claude binary not found in PATH")
+	}
 	return p.reviewSubprocess(ctx, req)
 }
 
