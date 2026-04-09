@@ -344,7 +344,7 @@ func (c *Classifier) reviewWithLLM(ctx context.Context, req ClassifyRequest, cmd
 	llmResp, err := c.llmProvider.Review(ctx, llmReq)
 	if err != nil {
 		if errors.Is(err, llm.ErrRateLimited) {
-			result.Reasoning = "LLM rate limit exceeded"
+			result.Reasoning = truncateReasoning("LLM rate limit exceeded", c.maxReasonLen)
 		} else {
 			result.Reasoning = truncateReasoning("LLM call failed", c.maxReasonLen)
 		}
@@ -415,7 +415,7 @@ func (c *Classifier) reviewWithLLM(ctx context.Context, req ClassifyRequest, cmd
 	// Second call MUST return a verdict — another file request → deny.
 	if len(llmResp2.RequestFiles) > 0 {
 		result.Decision = "deny"
-		result.Reasoning = "LLM requested files again (two-call maximum enforced)"
+		result.Reasoning = truncateReasoning("LLM requested files again (two-call maximum enforced)", c.maxReasonLen)
 		return result
 	}
 
