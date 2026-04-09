@@ -291,10 +291,10 @@ func (c *Classifier) Classify(ctx context.Context, req ClassifyRequest) *Classif
 		switch llmResult.Decision {
 		case "allow":
 			resp.Action = "allow"
-			resp.Reason = "LLM review approved: " + truncate(llmResult.Reasoning, 200)
+			resp.Reason = llmReasonString("LLM review approved", llmResult.Reasoning)
 		case "deny":
 			resp.Action = "block"
-			resp.Reason = "LLM review denied: " + truncate(llmResult.Reasoning, 200)
+			resp.Reason = llmReasonString("LLM review denied", llmResult.Reasoning)
 		default:
 			// Invalid/empty decision → ask user (fail-closed).
 			resp.Action = "review"
@@ -491,6 +491,16 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return string(runes[:maxLen]) + "..."
+}
+
+// llmReasonString builds a reason string from a prefix and reasoning.
+// When reasoning is empty (e.g., max_response_reasoning_length=0), returns
+// just the prefix without a trailing ": ".
+func llmReasonString(prefix, reasoning string) string {
+	if reasoning == "" {
+		return prefix
+	}
+	return prefix + ": " + truncate(reasoning, 200)
 }
 
 // buildASTSummary derives an ASTSummary from the parsed CommandInfo slice.
