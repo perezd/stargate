@@ -1905,6 +1905,10 @@ When a YELLOW rule with `llm_review = true` matches:
 
 The precedent corpus is an SQLite database that stores past LLM classification judgments and user approval feedback. Its primary purpose is **building case law for LLM consistency** — providing the LLM with relevant prior judgments so it makes more consistent decisions over time.
 
+**File permissions:** The SQLite database file and its parent directory are created with `0600`/`0700` permissions respectively. At startup, if the file already exists with permissions looser than `0600`, a warning is logged. The database contains scrubbed command data and LLM reasoning — not secrets, but operational context that should be protected from other local users.
+
+**Goroutine lifecycle:** `Open()` accepts a `context.Context`. Background goroutines (pruning, TTL sweep) select on `ctx.Done()` for graceful shutdown. `Close()` cancels the context and waits for goroutines to exit via `sync.WaitGroup`. This prevents goroutine leaks in tests and ensures clean shutdown on SIGTERM.
+
 #### Schema
 
 ```sql
@@ -1983,6 +1987,8 @@ similarity = |A ∩ B| / |A ∪ B|
 
 At the default `min_similarity` of 0.7, a 3-stage pipeline must share at least 2 stages with a cached entry to qualify as a precedent.
 
+**Candidate set bounding:** Similarity search first queries SQLite for entries with overlapping `command_names` (SQL-level filter), then computes Jaccard in Go. To prevent O(n) scans on common commands (e.g., `curl` may have thousands of entries), the SQL query applies `LIMIT 200 ORDER BY created_at DESC`. This bounds memory and CPU while preferring recent precedents.
+
 #### User Approval Recording
 
 When `store_user_approvals = true` and the `/feedback` endpoint receives an `"executed"` outcome for a YELLOW classification:
@@ -1995,9 +2001,9 @@ This creates a feedback loop: commands the user consistently approves build stro
 
 #### Corpus Integrity
 
-- **Rate-limited writes**: Maximum one corpus write per structural signature per hour AND a global cap of `corpus.max_writes_per_minute` (default 10) across all signatures. The per-signature limit prevents flooding a single signature; the global limit prevents an attacker from building biased precedents across many slightly-different signatures (varying one flag each time to create distinct signatures that still pass the 0.7 Jaccard similarity threshold for each other).
+- **Rate-limited writes**: Maximum one corpus write per structural signature per hour AND a global cap of `corpus.max_writes_per_minute` (default 10) across all signatures. The per-signature limit prevents flooding a single signature; the global limit prevents an attacker from building biased precedents across many slightly-different signatures (varying one flag each time to create distinct signatures that still pass the 0.7 Jaccard similarity threshold for each other). Both rate limit stores should use the `TTLMap` utility (§ Task 5.4.5) for automatic cleanup of expired entries — bare maps without eviction will leak memory over the server's lifetime.
 - **Balanced precedent injection**: When injecting precedents into the LLM prompt, include both allow and deny precedents if they exist — never present a one-sided view. If the corpus contains 3 "allow" and 1 "deny" for a similar signature, the LLM sees both.
-- **`max_precedents_per_decision`** (config option, default 3): Caps how many same-decision precedents are shown for a given structural signature. The three decision categories are `allow`, `deny`, and `user_approved` — each is capped independently. This prevents user approvals from crowding out LLM judgments and vice versa. Combined with `max_precedents`, this ensures balanced representation. For example, with `max_precedents = 5` and `max_precedents_per_decision = 3`, the LLM sees at most 3 "allow" + 1 "deny" + 1 "user_approved" (or other combinations up to 5 total).
+- **`max_precedents_per_polarity`** (config option, default 3): Caps how many same-polarity precedents are shown for a given structural signature. The two polarity groups are **positive** (`allow` + `user_approved`) and **negative** (`deny`). `allow` and `user_approved` are combined into a single positive cap to prevent two "positive" categories from drowning out denies. Combined with `max_precedents`, this ensures balanced representation. For example, with `max_precedents = 5` and `max_precedents_per_polarity = 3`, the LLM sees at most 3 positive + 2 negative (or vice versa). Within the positive group, `user_approved` entries retain their distinct label ("approved by human operator, not by LLM judgment") so the LLM can weigh them differently.
 - **Idempotent user approvals**: The corpus enforces a `UNIQUE(stargate_trace_id, decision)` constraint. Duplicate feedback submissions for the same trace are silently ignored.
 - **Precedent TTL/decay**: Precedents older than `corpus.max_age` (default 90d) are excluded from precedent injection queries. The precedent format in the prompt shows the age; the LLM can weigh older precedents less.
 - **`user_approved` precedent labeling**: Precedents with `decision = "user_approved"` are labeled in the prompt with an explicit caveat: "This command was approved by a human operator, not by LLM judgment." This prevents the LLM from treating user approvals as LLM-reviewed verdicts.
