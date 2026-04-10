@@ -332,12 +332,11 @@ provider = "anthropic"
 # Model to use for YELLOW command review.
 model = "claude-sonnet-4-6"
 
-# API key for direct provider access. If omitted, falls back to:
-#   1. ANTHROPIC_API_KEY env var
-#   2. CLAUDE_CODE_OAUTH_TOKEN env var (via claude -p subprocess)
-# If none are available, LLM review is disabled (all llm_review commands
+# Authentication is via environment variables only (no secrets in config):
+#   1. ANTHROPIC_API_KEY → direct SDK calls (fast, no subprocess)
+#   2. CLAUDE_CODE_OAUTH_TOKEN + claude binary on PATH → subprocess via claude -p
+# If neither is set, LLM review is disabled (all llm_review commands
 # fall through to YELLOW/ask user).
-# api_key = ""
 
 # Maximum characters of LLM reasoning to include in the API response.
 # The full reasoning is always stored in the corpus for precedent use.

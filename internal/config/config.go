@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"time"
@@ -64,6 +65,7 @@ func validateRulePattern(pattern string) error {
 // Config is the top-level configuration structure for stargate.
 type Config struct {
 	Version    string                    `toml:"-"` // set at startup, not from TOML
+	ServerCWD  string                    `toml:"-"` // resolved server working directory, set at startup
 	Server     ServerConfig              `toml:"server"`
 	Parser     ParserConfig              `toml:"parser"`
 	Classifier ClassifierConfig          `toml:"classifier"`
@@ -156,14 +158,13 @@ type ResolveConfig struct {
 type LLMConfig struct {
 	Provider                   string   `toml:"provider"`
 	Model                      string   `toml:"model"`
-	APIKey                     string   `toml:"api_key"`
 	MaxTokens                  int      `toml:"max_tokens"`
 	Temperature                float64  `toml:"temperature"`
 	AllowFileRetrieval         bool     `toml:"allow_file_retrieval"`
 	MaxFileSize                int      `toml:"max_file_size"`
 	MaxFilesPerRequest         int      `toml:"max_files_per_request"`
 	MaxTotalFileBytes          int      `toml:"max_total_file_bytes"`
-	MaxCallsPerMinute          int      `toml:"max_calls_per_minute"`
+	MaxCallsPerMinute          *int     `toml:"max_calls_per_minute"`
 	AllowedPaths               []string `toml:"allowed_paths"`
 	DeniedPaths                []string `toml:"denied_paths"`
 	SystemPrompt               string   `toml:"system_prompt"`
@@ -234,6 +235,18 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 
+	// Capture the server's working directory (symlink-resolved) so all
+	// consumers of Config.ServerCWD can trust it's the canonical path.
+	// Done in Load so it's set exactly once at startup.
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("config: determine working directory: %w", err)
+	}
+	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = resolved
+	}
+	cfg.ServerCWD = cwd
+
 	return &cfg, nil
 }
 
@@ -269,8 +282,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.LLM.MaxTotalFileBytes == 0 {
 		cfg.LLM.MaxTotalFileBytes = 131072 // 128KB
 	}
-	if cfg.LLM.MaxCallsPerMinute == 0 {
-		cfg.LLM.MaxCallsPerMinute = 30
+	if cfg.LLM.MaxCallsPerMinute == nil {
+		defaultRate := 30
+		cfg.LLM.MaxCallsPerMinute = &defaultRate
 	}
 	if cfg.Corpus.Path == "" {
 		cfg.Corpus.Path = "~/.local/share/stargate/precedents.db"
@@ -433,8 +447,8 @@ func (cfg *Config) Validate() error {
 	if cfg.LLM.MaxTotalFileBytes < 0 {
 		return fmt.Errorf("config: llm.max_total_file_bytes must be non-negative; got %d", cfg.LLM.MaxTotalFileBytes)
 	}
-	if cfg.LLM.MaxCallsPerMinute < 0 {
-		return fmt.Errorf("config: llm.max_calls_per_minute must be non-negative; got %d", cfg.LLM.MaxCallsPerMinute)
+	if cfg.LLM.MaxCallsPerMinute != nil && *cfg.LLM.MaxCallsPerMinute < 0 {
+		return fmt.Errorf("config: llm.max_calls_per_minute must be non-negative; got %d", *cfg.LLM.MaxCallsPerMinute)
 	}
 
 	// --- Corpus ---

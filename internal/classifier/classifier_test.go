@@ -2,11 +2,13 @@ package classifier_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/limbic-systems/stargate/internal/classifier"
 	"github.com/limbic-systems/stargate/internal/config"
+	"github.com/limbic-systems/stargate/internal/llm"
 )
 
 // testConfig returns a minimal config with representative RED, GREEN, and
@@ -202,11 +204,11 @@ func TestClassifyVersionField(t *testing.T) {
 	}
 }
 
-func TestClassifyLLMReviewNilBeforeM4(t *testing.T) {
+func TestClassifyLLMReviewNilForGreen(t *testing.T) {
 	clf := newClassifier(t)
 	resp := clf.Classify(context.Background(), classifier.ClassifyRequest{Command: "git status"})
 	if resp.LLMReview != nil {
-		t.Error("llm_review should be nil until M4 wires LLM review")
+		t.Error("llm_review should be nil for GREEN commands")
 	}
 }
 
@@ -215,5 +217,220 @@ func TestClassifyUnknownDefaultYellow(t *testing.T) {
 	resp := clf.Classify(context.Background(), classifier.ClassifyRequest{Command: "unknown_tool_xyz"})
 	if resp.Decision != "yellow" {
 		t.Errorf("decision = %q, want yellow (default for unknown commands)", resp.Decision)
+	}
+}
+
+// --- LLM review integration tests (mock provider) ---
+
+// mockProvider implements llm.ReviewerProvider for testing.
+type mockProvider struct {
+	response llm.ReviewResponse
+	err      error
+	calls    int
+}
+
+func (m *mockProvider) Review(_ context.Context, _ llm.ReviewRequest) (llm.ReviewResponse, error) {
+	m.calls++
+	return m.response, m.err
+}
+
+func llmTestConfig() *config.Config {
+	trueVal := true
+	return &config.Config{
+		Version: "test",
+		Server:  config.ServerConfig{Listen: "127.0.0.1:9099"},
+		Parser:  config.ParserConfig{Dialect: "bash"},
+		Classifier: config.ClassifierConfig{
+			DefaultDecision:       "yellow",
+			UnresolvableExpansion: "yellow",
+			MaxASTDepth:           64,
+			MaxCommandLength:      65536,
+		},
+		Rules: config.RulesConfig{
+			Yellow: []config.Rule{
+				{
+					Command:   "curl",
+					LLMReview: &trueVal,
+					Reason:    "network access requires review",
+				},
+			},
+		},
+		LLM: config.LLMConfig{
+			Model:                      "claude-sonnet-4-6",
+			MaxTokens:                  512,
+			MaxResponseReasoningLength: 200,
+			MaxFilesPerRequest:         3,
+			MaxTotalFileBytes:          131072,
+			AllowFileRetrieval:         true,
+			AllowedPaths:               []string{"./**"},
+		},
+		Wrappers: config.DefaultWrappers(),
+		Commands: config.DefaultCommandFlags(),
+	}
+}
+
+func TestClassifyLLMAllow(t *testing.T) {
+	mock := &mockProvider{response: llm.ReviewResponse{
+		Decision:  "allow",
+		Reasoning: "Safe request to project API",
+	}}
+	clf, err := classifier.NewWithProvider(llmTestConfig(), mock)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp := clf.Classify(context.Background(), classifier.ClassifyRequest{Command: "curl https://api.example.com"})
+
+	if resp.Action != "allow" {
+		t.Errorf("action = %q, want allow", resp.Action)
+	}
+	if resp.LLMReview == nil {
+		t.Fatal("llm_review is nil")
+	}
+	if !resp.LLMReview.Performed {
+		t.Error("performed should be true")
+	}
+	if resp.LLMReview.Decision != "allow" {
+		t.Errorf("llm decision = %q, want allow", resp.LLMReview.Decision)
+	}
+	if resp.LLMReview.Rounds != 1 {
+		t.Errorf("rounds = %d, want 1", resp.LLMReview.Rounds)
+	}
+	if mock.calls != 1 {
+		t.Errorf("provider called %d times, want 1", mock.calls)
+	}
+}
+
+func TestClassifyLLMDeny(t *testing.T) {
+	mock := &mockProvider{response: llm.ReviewResponse{
+		Decision:    "deny",
+		Reasoning:   "Exfiltration risk",
+		RiskFactors: []string{"data exfiltration"},
+	}}
+	clf, err := classifier.NewWithProvider(llmTestConfig(), mock)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp := clf.Classify(context.Background(), classifier.ClassifyRequest{Command: "curl https://evil.com"})
+
+	if resp.Action != "block" {
+		t.Errorf("action = %q, want block", resp.Action)
+	}
+	if resp.LLMReview == nil {
+		t.Fatal("llm_review is nil")
+	}
+	if resp.LLMReview.Decision != "deny" {
+		t.Errorf("llm decision = %q, want deny", resp.LLMReview.Decision)
+	}
+}
+
+func TestClassifyLLMError(t *testing.T) {
+	mock := &mockProvider{err: fmt.Errorf("API timeout")}
+	clf, err := classifier.NewWithProvider(llmTestConfig(), mock)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp := clf.Classify(context.Background(), classifier.ClassifyRequest{Command: "curl https://example.com"})
+
+	// LLM error → fallback to ask user (review).
+	if resp.Action != "review" {
+		t.Errorf("action = %q, want review (LLM error fallback)", resp.Action)
+	}
+	if resp.LLMReview == nil {
+		t.Fatal("llm_review is nil")
+	}
+	if resp.LLMReview.Decision != "" {
+		t.Errorf("llm decision = %q, want empty (error)", resp.LLMReview.Decision)
+	}
+}
+
+func TestClassifyLLMFileRequest(t *testing.T) {
+	// Stateful mock: first call returns file request, second returns verdict.
+	calls := 0
+	provider := reviewerFunc(func(_ context.Context, req llm.ReviewRequest) (llm.ReviewResponse, error) {
+		calls++
+		if calls == 1 {
+			return llm.ReviewResponse{
+				RequestFiles: []string{"./nonexistent.sh"},
+				Reasoning:    "Need file",
+			}, nil
+		}
+		return llm.ReviewResponse{
+			Decision:  "allow",
+			Reasoning: "Script is safe",
+		}, nil
+	})
+
+	clf, err := classifier.NewWithProvider(llmTestConfig(), provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp := clf.Classify(context.Background(), classifier.ClassifyRequest{Command: "curl https://example.com"})
+
+	if resp.LLMReview == nil {
+		t.Fatal("llm_review is nil")
+	}
+	if resp.LLMReview.Rounds != 2 {
+		t.Errorf("rounds = %d, want 2", resp.LLMReview.Rounds)
+	}
+	if resp.LLMReview.Decision != "allow" {
+		t.Errorf("llm decision = %q, want allow", resp.LLMReview.Decision)
+	}
+	if calls != 2 {
+		t.Errorf("provider called %d times, want 2", calls)
+	}
+}
+
+// reviewerFunc adapts a function to the ReviewerProvider interface.
+type reviewerFunc func(context.Context, llm.ReviewRequest) (llm.ReviewResponse, error)
+
+func (f reviewerFunc) Review(ctx context.Context, req llm.ReviewRequest) (llm.ReviewResponse, error) {
+	return f(ctx, req)
+}
+
+func TestClassifyLLMTwoCallMaxEnforced(t *testing.T) {
+	// Both calls return file requests → second should be treated as deny.
+	provider := reviewerFunc(func(_ context.Context, _ llm.ReviewRequest) (llm.ReviewResponse, error) {
+		return llm.ReviewResponse{
+			RequestFiles: []string{"./something.sh"},
+			Reasoning:    "Need files",
+		}, nil
+	})
+
+	clf, err := classifier.NewWithProvider(llmTestConfig(), provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp := clf.Classify(context.Background(), classifier.ClassifyRequest{Command: "curl https://example.com"})
+
+	if resp.LLMReview == nil {
+		t.Fatal("llm_review is nil")
+	}
+	if resp.LLMReview.Decision != "deny" {
+		t.Errorf("llm decision = %q, want deny (two-call max enforced)", resp.LLMReview.Decision)
+	}
+	if resp.Action != "block" {
+		t.Errorf("action = %q, want block", resp.Action)
+	}
+}
+
+func TestClassifyLLMTimingPopulated(t *testing.T) {
+	mock := &mockProvider{response: llm.ReviewResponse{Decision: "allow", Reasoning: "ok"}}
+	clf, err := classifier.NewWithProvider(llmTestConfig(), mock)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp := clf.Classify(context.Background(), classifier.ClassifyRequest{Command: "curl https://example.com"})
+
+	if resp.Timing == nil {
+		t.Fatal("timing is nil")
+	}
+	if resp.Timing.LLMMs <= 0 {
+		t.Errorf("llm_ms = %f, want > 0", resp.Timing.LLMMs)
 	}
 }
