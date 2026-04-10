@@ -511,22 +511,20 @@ max_precedents = 5
 # 1.0 = exact structural match only. 0.5 = half the signature must overlap.
 min_similarity = 0.7
 
-# Maximum number of precedents with the same decision to show.
+# Maximum number of precedents per polarity (allow vs deny) to show.
 # Prevents one-sided precedent injection. With max_precedents = 5 and
-# max_precedents_per_decision = 3, the LLM sees at most 3 allow + 2 deny.
-max_precedents_per_decision = 3
+# max_precedents_per_polarity = 3, the LLM sees at most 3 allow + 2 deny.
+max_precedents_per_polarity = 3
 
 # ---------------------------------------------------------------------------
-# Exact Hit Behavior
+# Command Cache
 # ---------------------------------------------------------------------------
-# When an exact structural match exists in the corpus, stargate can either
-# return the cached decision directly (skipping the LLM) or include it as
-# a high-confidence precedent in a fresh LLM call.
-#
-# The corpus's primary purpose is building case law for LLM consistency,
-# not caching. Default is conservative: exact hits are treated as precedents,
-# not automatic decisions.
-exact_hit_mode = "precedent"  # "precedent" (default) or "auto_decide"
+# When enabled, the command cache stores LLM decisions for exact command+CWD
+# pairs to avoid redundant LLM calls within the TTL window. The cache is
+# in-memory only and clears on restart.
+command_cache_enabled = false
+command_cache_ttl = "1h"
+command_cache_max_entries = 10000
 
 # ---------------------------------------------------------------------------
 # Corpus Lifecycle

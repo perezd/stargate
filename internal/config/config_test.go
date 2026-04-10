@@ -122,9 +122,14 @@ func TestValidation(t *testing.T) {
 			wantErr: "invalid pattern",
 		},
 		{
-			name:    "invalid exact_hit_mode",
-			toml:    "[corpus]\nexact_hit_mode = \"bogus\"",
-			wantErr: "exact_hit_mode",
+			name:    "invalid command_cache_ttl",
+			toml:    "[corpus]\ncommand_cache_ttl = \"not-a-duration\"",
+			wantErr: "corpus.command_cache_ttl",
+		},
+		{
+			name:    "negative command_cache_max_entries",
+			toml:    "[corpus]\ncommand_cache_max_entries = -1",
+			wantErr: "corpus.command_cache_max_entries",
 		},
 		{
 			name:    "invalid server.listen format",

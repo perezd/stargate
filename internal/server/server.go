@@ -23,6 +23,14 @@ type Server struct {
 	startTime  time.Time
 }
 
+// Close releases resources held by the server (corpus DB, etc.).
+func (s *Server) Close() error {
+	if s.clf != nil {
+		return s.clf.Close()
+	}
+	return nil
+}
+
 // New creates a new Server with the given config and registers all routes.
 func New(cfg *config.Config) (*Server, error) {
 	if cfg == nil {
@@ -50,7 +58,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /health", s.handleHealth)
 	s.mux.HandleFunc("POST /classify", s.handleClassify)
-	s.mux.HandleFunc("POST /feedback", stubHandler)
+	if fh := s.clf.FeedbackHandler(); fh != nil {
+		s.mux.HandleFunc("POST /feedback", fh.HandleFeedback)
+	} else {
+		s.mux.HandleFunc("POST /feedback", stubHandler)
+	}
 	s.mux.HandleFunc("POST /reload", stubHandler)
 	s.mux.HandleFunc("POST /test", stubHandler)
 }

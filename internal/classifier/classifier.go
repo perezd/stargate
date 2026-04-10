@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/limbic-systems/stargate/internal/config"
+	"github.com/limbic-systems/stargate/internal/corpus"
+	"github.com/limbic-systems/stargate/internal/feedback"
 	"github.com/limbic-systems/stargate/internal/llm"
 	"github.com/limbic-systems/stargate/internal/parser"
 	"github.com/limbic-systems/stargate/internal/rules"
@@ -24,19 +26,24 @@ import (
 
 // Classifier orchestrates the parse → rule-engine → LLM review pipeline.
 type Classifier struct {
-	engine       *rules.Engine
-	walkerCfg    *parser.WalkerConfig
-	dialect      string
-	maxCmdLen    int
-	maxASTDepth  int
-	unresolvable string
-	version      string // from config, included in every response
-	llmProvider  llm.ReviewerProvider // nil = LLM review disabled
-	scrubber     *scrub.Scrubber
-	llmCfg       config.LLMConfig
-	scopes       map[string][]string // for prompt injection
-	serverCWD    string              // for file retrieval path anchoring
-	maxReasonLen int                 // max reasoning chars in API response
+	engine          *rules.Engine
+	walkerCfg       *parser.WalkerConfig
+	dialect         string
+	maxCmdLen       int
+	maxASTDepth     int
+	unresolvable    string
+	version         string // from config, included in every response
+	llmProvider     llm.ReviewerProvider // nil = LLM review disabled
+	scrubber        *scrub.Scrubber
+	llmCfg          config.LLMConfig
+	corpusCfg       config.CorpusConfig
+	scopes          map[string][]string // for prompt injection
+	serverCWD       string              // for file retrieval path anchoring
+	maxReasonLen    int                 // max reasoning chars in API response
+	corpus          *corpus.Corpus      // nil = corpus disabled
+	cmdCache        *CommandCache
+	feedbackHandler *feedback.Handler
+	hmacSecret      []byte
 }
 
 // ClassifyRequest is the input to the classifier.
@@ -163,20 +170,59 @@ func New(cfg *config.Config) (*Classifier, error) {
 		}
 	}
 
+	// Initialize corpus if enabled.
+	var c *corpus.Corpus
+	if cfg.Corpus.Enabled {
+		var err2 error
+		c, err2 = corpus.Open(context.Background(), cfg.Corpus)
+		if err2 != nil {
+			return nil, fmt.Errorf("classifier: open corpus: %w", err2)
+		}
+	}
+
+	// Initialize command cache.
+	var cacheTTL time.Duration
+	if cfg.Corpus.CommandCacheTTL != "" {
+		cacheTTL, _ = time.ParseDuration(cfg.Corpus.CommandCacheTTL)
+	}
+	var cmdCache *CommandCache
+	if cfg.Corpus.CommandCacheEnabled {
+		cmdCache = NewCommandCache(context.Background(), cacheTTL, cfg.Corpus.CommandCacheMaxEntries)
+	} else {
+		cmdCache = NewCommandCache(context.Background(), 0, 0) // no-op cache
+	}
+
+	// Generate HMAC secret for feedback tokens.
+	hmacSecret, err := feedback.GenerateSecret()
+	if err != nil {
+		if c != nil {
+			c.Close()
+		}
+		return nil, fmt.Errorf("classifier: generate HMAC secret: %w", err)
+	}
+
+	// Create feedback handler.
+	feedbackHandler := feedback.NewHandler(context.Background(), c, hmacSecret)
+
 	return &Classifier{
-		engine:       eng,
-		walkerCfg:    wc,
-		dialect:      cfg.Parser.Dialect,
-		maxCmdLen:    cfg.Classifier.MaxCommandLength,
-		maxASTDepth:  cfg.Classifier.MaxASTDepth,
-		unresolvable: cfg.Classifier.UnresolvableExpansion,
-		version:      cmp.Or(cfg.Version, "dev"),
-		llmProvider:  provider,
-		scrubber:     scrubber,
-		llmCfg:       cfg.LLM,
-		scopes:       cfg.Scopes,
-		serverCWD:    serverCWD,
-		maxReasonLen: cfg.LLM.MaxResponseReasoningLength,
+		engine:          eng,
+		walkerCfg:       wc,
+		dialect:         cfg.Parser.Dialect,
+		maxCmdLen:       cfg.Classifier.MaxCommandLength,
+		maxASTDepth:     cfg.Classifier.MaxASTDepth,
+		unresolvable:    cfg.Classifier.UnresolvableExpansion,
+		version:         cmp.Or(cfg.Version, "dev"),
+		llmProvider:     provider,
+		scrubber:        scrubber,
+		llmCfg:          cfg.LLM,
+		corpusCfg:       cfg.Corpus,
+		scopes:          cfg.Scopes,
+		serverCWD:       serverCWD,
+		maxReasonLen:    cfg.LLM.MaxResponseReasoningLength,
+		corpus:          c,
+		cmdCache:        cmdCache,
+		feedbackHandler: feedbackHandler,
+		hmacSecret:      hmacSecret,
 	}, nil
 }
 
@@ -281,9 +327,14 @@ func (c *Classifier) Classify(ctx context.Context, req ClassifyRequest) *Classif
 	resp.Reason = result.Reason
 	resp.Rule = result.Rule
 
+	// Precompute structural signature for corpus and feedback (used by LLM review and trace recording).
+	signature, sigHash := corpus.ComputeSignature(cmds)
+	cmdNames := corpus.CommandNames(cmds)
+	cmdFlags := collectFlags(cmds)
+
 	// 6. LLM review — only for YELLOW decisions with llm_review=true.
 	if result.LLMReview && c.llmProvider != nil {
-		llmResult := c.reviewWithLLM(ctx, req, cmds, resp)
+		llmResult := c.reviewWithLLM(ctx, req, cmds, resp, signature, sigHash, cmdNames, cmdFlags)
 		resp.LLMReview = llmResult
 		resp.Timing.LLMMs = llmResult.DurationMs
 
@@ -301,11 +352,47 @@ func (c *Classifier) Classify(ctx context.Context, req ClassifyRequest) *Classif
 		}
 	}
 
+	// 7. Generate feedback token for YELLOW decisions.
+	if resp.Decision == "yellow" {
+		toolUseID := ""
+		if req.Context != nil {
+			if v, ok := req.Context["tool_use_id"].(string); ok {
+				toolUseID = v
+			}
+		}
+		token := feedback.GenerateToken(c.hmacSecret, traceID, toolUseID, resp.Decision)
+		resp.FeedbackToken = &token
+		if c.feedbackHandler != nil {
+			sessionID, agent := "", ""
+			if req.Context != nil {
+				if v, ok := req.Context["session_id"].(string); ok {
+					sessionID = v
+				}
+				if v, ok := req.Context["agent"].(string); ok {
+					agent = v
+				}
+			}
+			c.feedbackHandler.RecordTrace(feedback.TraceInfo{
+				Decision:      resp.Decision,
+				ToolUseID:     toolUseID,
+				TraceID:       traceID,
+				Signature:     signature,
+				SignatureHash: sigHash,
+				CommandNames:  cmdNames,
+				Flags:         cmdFlags,
+				RawCommand:    c.scrubber.Command(req.Command),
+				CWD:           req.CWD,
+				SessionID:     sessionID,
+				Agent:         agent,
+			})
+		}
+	}
+
 	return finalize()
 }
 
-// reviewWithLLM runs the LLM review pipeline: scrub → prompt → call → (files → call).
-func (c *Classifier) reviewWithLLM(ctx context.Context, req ClassifyRequest, cmds []rules.CommandInfo, resp *ClassifyResponse) *LLMReviewResult {
+// reviewWithLLM runs the LLM review pipeline: cache → corpus → scrub → prompt → call → (files → call) → corpus write → cache write.
+func (c *Classifier) reviewWithLLM(ctx context.Context, req ClassifyRequest, cmds []rules.CommandInfo, resp *ClassifyResponse, sig, sigHash string, cmdNames, cmdFlags []string) *LLMReviewResult {
 	llmStart := time.Now()
 	result := &LLMReviewResult{
 		Performed:      true,
@@ -318,6 +405,49 @@ func (c *Classifier) reviewWithLLM(ctx context.Context, req ClassifyRequest, cmd
 	defer func() {
 		result.DurationMs = float64(time.Since(llmStart).Microseconds()) / 1000
 	}()
+
+	// Command cache check — skip everything on HIT.
+	if cached, hit := c.cmdCache.Lookup(req.Command, req.CWD); hit {
+		result.Decision = cached.Decision
+		result.Reasoning = "command cache hit"
+		return result
+	}
+
+	// Corpus precedent lookup.
+	var precedentText string
+	var precedentsFound int
+	if c.corpus != nil {
+		maxAge := 24 * time.Hour * 90 // default 90 days
+		if parsed, err := config.ParseMaxAge(c.corpusCfg.MaxAge); err == nil && parsed > 0 {
+			maxAge = parsed
+		}
+		lookupCfg := corpus.LookupConfig{
+			MinSimilarity:  c.corpusCfg.MinSimilarity,
+			MaxPrecedents:  c.corpusCfg.MaxPrecedents,
+			MaxPerPolarity: c.corpusCfg.MaxPrecedentsPerPolarity,
+			MaxAge:         maxAge,
+		}
+		precedents, err := c.corpus.LookupSimilar(cmdNames, sig, lookupCfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "classifier: corpus lookup: %v\n", err)
+		} else {
+			precedentsFound = len(precedents)
+			// Format precedents for prompt.
+			var fmtPrecedents []corpus.FormatPrecedent
+			for _, p := range precedents {
+				fmtPrecedents = append(fmtPrecedents, corpus.FormatPrecedent{
+					Decision:   p.Decision,
+					Command:    cmp.Or(p.RawCommand, "[scrubbed]"),
+					Reasoning:  p.Reasoning,
+					CWD:        p.CWD,
+					CreatedAt:  p.CreatedAt,
+					Similarity: p.Similarity,
+					ExactMatch: p.SignatureHash == sigHash,
+				})
+			}
+			precedentText = corpus.FormatPrecedents(fmtPrecedents)
+		}
+	}
 
 	// Scrub command and build AST summary.
 	scrubbedCmd := c.scrubber.Command(req.Command)
@@ -340,9 +470,73 @@ func (c *Classifier) reviewWithLLM(ctx context.Context, req ClassifyRequest, cmd
 		CWD:        req.CWD,
 		RuleReason: resp.Reason,
 		Scopes:     strings.Join(scopeLines, "\n"),
+		Precedents: precedentText,
 	}
 
 	systemPrompt, userContent := llm.BuildPrompt(c.llmCfg.SystemPrompt, vars)
+
+	// Populate corpus summary in response.
+	corpusSummary := &CorpusSummary{PrecedentsFound: precedentsFound}
+	resp.Corpus = corpusSummary
+
+	// postProcess writes to corpus and command cache after LLM decision.
+	postProcess := func() {
+		if result.Decision == "" {
+			return // no decision to store (LLM error)
+		}
+
+		// Write judgment to corpus (scrubbed, rate-limited).
+		if c.corpus != nil && result.Decision != "" {
+			// Check store_decisions filter.
+			shouldStore := true
+			switch c.corpusCfg.StoreDecisions {
+			case "allow_only":
+				shouldStore = result.Decision == "allow"
+			case "deny_only":
+				shouldStore = result.Decision == "deny"
+			case "all", "":
+				shouldStore = true
+			}
+			if shouldStore {
+				entry := corpus.PrecedentEntry{
+					Signature:     sig,
+					SignatureHash: sigHash,
+					CommandNames:  cmdNames,
+					Flags:         collectFlags(cmds),
+					ASTSummary:    astSummary,
+					CWD:           req.CWD,
+					Decision:      result.Decision,
+					TraceID:       resp.StargateTrID,
+				}
+				if c.corpusCfg.StoreRawCommand {
+					entry.RawCommand = scrubbedCmd
+				}
+				if c.corpusCfg.StoreReasoning {
+					entry.Reasoning = truncateStr(result.Reasoning, c.corpusCfg.MaxReasoningLength)
+				}
+				entry.RiskFactors = result.RiskFactors
+				if err := c.corpus.Write(entry); err != nil {
+					if !errors.Is(err, corpus.ErrRateLimited) {
+						fmt.Fprintf(os.Stderr, "classifier: corpus write: %v\n", err)
+					}
+				} else {
+					corpusSummary.EntryWritten = true
+				}
+			}
+		}
+
+		// Write to command cache.
+		action := ""
+		switch result.Decision {
+		case "allow":
+			action = "allow"
+		case "deny":
+			action = "block"
+		default:
+			action = "review"
+		}
+		c.cmdCache.Store(req.Command, req.CWD, result.Decision, action)
+	}
 
 	// First LLM call.
 	llmReq := llm.ReviewRequest{
@@ -370,6 +564,7 @@ func (c *Classifier) reviewWithLLM(ctx context.Context, req ClassifyRequest, cmd
 		result.Decision = llmResp.Decision
 		result.Reasoning = truncateStr(c.scrubber.Text(llmResp.Reasoning), c.maxReasonLen)
 		result.RiskFactors = c.scrubRiskFactors(llmResp.RiskFactors)
+		postProcess()
 		return result
 	}
 
@@ -380,6 +575,7 @@ func (c *Classifier) reviewWithLLM(ctx context.Context, req ClassifyRequest, cmd
 		// File retrieval disabled — return first-call response, no second call.
 		result.Decision = llmResp.Decision
 		result.Reasoning = truncateStr(c.scrubber.Text(llmResp.Reasoning), c.maxReasonLen)
+		postProcess()
 		return result
 	}
 
@@ -429,12 +625,14 @@ func (c *Classifier) reviewWithLLM(ctx context.Context, req ClassifyRequest, cmd
 	if len(llmResp2.RequestFiles) > 0 {
 		result.Decision = "deny"
 		result.Reasoning = truncateStr("LLM requested files again (two-call maximum enforced)", c.maxReasonLen)
+		postProcess()
 		return result
 	}
 
 	result.Decision = llmResp2.Decision
 	result.Reasoning = truncateStr(c.scrubber.Text(llmResp2.Reasoning), c.maxReasonLen)
 	result.RiskFactors = c.scrubRiskFactors(llmResp2.RiskFactors)
+	postProcess()
 	return result
 }
 
@@ -567,6 +765,34 @@ func contextLabel(ctx rules.CommandContext) string {
 	}
 }
 
+
+// FeedbackHandler returns the feedback handler for use by the HTTP server.
+func (c *Classifier) FeedbackHandler() *feedback.Handler {
+	return c.feedbackHandler
+}
+
+// Close releases resources held by the classifier (corpus DB, etc.).
+func (c *Classifier) Close() error {
+	if c.corpus != nil {
+		return c.corpus.Close()
+	}
+	return nil
+}
+
+// collectFlags gathers all flags from all commands for corpus storage.
+func collectFlags(cmds []rules.CommandInfo) []string {
+	seen := make(map[string]struct{})
+	var flags []string
+	for _, cmd := range cmds {
+		for _, f := range cmd.Flags {
+			if _, ok := seen[f]; !ok {
+				seen[f] = struct{}{}
+				flags = append(flags, f)
+			}
+		}
+	}
+	return flags
+}
 
 // newTraceID generates a random trace ID with the sg_tr_ prefix.
 func newTraceID() string {
