@@ -161,6 +161,9 @@ type LLMConfig struct {
 	Temperature                float64  `toml:"temperature"`
 	AllowFileRetrieval         bool     `toml:"allow_file_retrieval"`
 	MaxFileSize                int      `toml:"max_file_size"`
+	MaxFilesPerRequest         int      `toml:"max_files_per_request"`
+	MaxTotalFileBytes          int      `toml:"max_total_file_bytes"`
+	MaxCallsPerMinute          int      `toml:"max_calls_per_minute"`
 	AllowedPaths               []string `toml:"allowed_paths"`
 	DeniedPaths                []string `toml:"denied_paths"`
 	SystemPrompt               string   `toml:"system_prompt"`
@@ -182,8 +185,10 @@ type CorpusConfig struct {
 	MaxAge                   string  `toml:"max_age"`
 	MaxEntries               int     `toml:"max_entries"`
 	PruneInterval            string  `toml:"prune_interval"`
+	MaxWritesPerMinute       int     `toml:"max_writes_per_minute"`
 	StoreDecisions           string  `toml:"store_decisions"`
 	StoreReasoning           bool    `toml:"store_reasoning"`
+	MaxReasoningLength       int     `toml:"max_reasoning_length"`
 	StoreRawCommand          bool    `toml:"store_raw_command"`
 	StoreUserApprovals       bool    `toml:"store_user_approvals"`
 	MaxPrecedentsPerDecision int     `toml:"max_precedents_per_decision"`
@@ -258,8 +263,23 @@ func applyDefaults(cfg *Config) {
 	if cfg.Classifier.MaxCommandLength == 0 {
 		cfg.Classifier.MaxCommandLength = 65536
 	}
+	if cfg.LLM.MaxFilesPerRequest == 0 {
+		cfg.LLM.MaxFilesPerRequest = 3
+	}
+	if cfg.LLM.MaxTotalFileBytes == 0 {
+		cfg.LLM.MaxTotalFileBytes = 131072 // 128KB
+	}
+	if cfg.LLM.MaxCallsPerMinute == 0 {
+		cfg.LLM.MaxCallsPerMinute = 30
+	}
 	if cfg.Corpus.Path == "" {
 		cfg.Corpus.Path = "~/.local/share/stargate/precedents.db"
+	}
+	if cfg.Corpus.MaxWritesPerMinute == 0 {
+		cfg.Corpus.MaxWritesPerMinute = 10
+	}
+	if cfg.Corpus.MaxReasoningLength == 0 {
+		cfg.Corpus.MaxReasoningLength = 1000
 	}
 	if cfg.Wrappers == nil {
 		cfg.Wrappers = DefaultWrappers()
@@ -407,6 +427,15 @@ func (cfg *Config) Validate() error {
 	if cfg.LLM.MaxResponseReasoningLength < 0 {
 		return fmt.Errorf("config: llm.max_response_reasoning_length must be non-negative; got %d", cfg.LLM.MaxResponseReasoningLength)
 	}
+	if cfg.LLM.MaxFilesPerRequest < 0 {
+		return fmt.Errorf("config: llm.max_files_per_request must be non-negative; got %d", cfg.LLM.MaxFilesPerRequest)
+	}
+	if cfg.LLM.MaxTotalFileBytes < 0 {
+		return fmt.Errorf("config: llm.max_total_file_bytes must be non-negative; got %d", cfg.LLM.MaxTotalFileBytes)
+	}
+	if cfg.LLM.MaxCallsPerMinute < 0 {
+		return fmt.Errorf("config: llm.max_calls_per_minute must be non-negative; got %d", cfg.LLM.MaxCallsPerMinute)
+	}
 
 	// --- Corpus ---
 	validExactHitModes := map[string]bool{"": true, "precedent": true, "auto_decide": true}
@@ -424,6 +453,12 @@ func (cfg *Config) Validate() error {
 	}
 	if cfg.Corpus.MaxPrecedentsPerDecision < 0 {
 		return fmt.Errorf("config: corpus.max_precedents_per_decision must be non-negative; got %d", cfg.Corpus.MaxPrecedentsPerDecision)
+	}
+	if cfg.Corpus.MaxWritesPerMinute < 0 {
+		return fmt.Errorf("config: corpus.max_writes_per_minute must be non-negative; got %d", cfg.Corpus.MaxWritesPerMinute)
+	}
+	if cfg.Corpus.MaxReasoningLength < 0 {
+		return fmt.Errorf("config: corpus.max_reasoning_length must be non-negative; got %d", cfg.Corpus.MaxReasoningLength)
 	}
 	if err := parseDayDuration("corpus.max_age", cfg.Corpus.MaxAge); err != nil {
 		return err
