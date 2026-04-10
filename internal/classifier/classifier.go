@@ -343,9 +343,9 @@ func (c *Classifier) reviewWithLLM(ctx context.Context, req ClassifyRequest, cmd
 	llmResp, err := c.llmProvider.Review(ctx, llmReq)
 	if err != nil {
 		if errors.Is(err, llm.ErrRateLimited) {
-			result.Reasoning = truncateReasoning("LLM rate limit exceeded", c.maxReasonLen)
+			result.Reasoning = truncateStr("LLM rate limit exceeded", c.maxReasonLen)
 		} else {
-			result.Reasoning = truncateReasoning("LLM call failed", c.maxReasonLen)
+			result.Reasoning = truncateStr("LLM call failed", c.maxReasonLen)
 		}
 		// Fail-closed: fall back to ask user.
 		return result
@@ -355,7 +355,7 @@ func (c *Classifier) reviewWithLLM(ctx context.Context, req ClassifyRequest, cmd
 	// echo secrets from the command or file contents in its response.
 	if len(llmResp.RequestFiles) == 0 {
 		result.Decision = llmResp.Decision
-		result.Reasoning = truncateReasoning(c.scrubber.Text(llmResp.Reasoning), c.maxReasonLen)
+		result.Reasoning = truncateStr(c.scrubber.Text(llmResp.Reasoning), c.maxReasonLen)
 		result.RiskFactors = c.scrubRiskFactors(llmResp.RiskFactors)
 		return result
 	}
@@ -366,7 +366,7 @@ func (c *Classifier) reviewWithLLM(ctx context.Context, req ClassifyRequest, cmd
 	if !c.llmCfg.AllowFileRetrieval {
 		// File retrieval disabled — return first-call response, no second call.
 		result.Decision = llmResp.Decision
-		result.Reasoning = truncateReasoning(c.scrubber.Text(llmResp.Reasoning), c.maxReasonLen)
+		result.Reasoning = truncateStr(c.scrubber.Text(llmResp.Reasoning), c.maxReasonLen)
 		return result
 	}
 
@@ -408,19 +408,19 @@ func (c *Classifier) reviewWithLLM(ctx context.Context, req ClassifyRequest, cmd
 	// Second LLM call.
 	llmResp2, err := c.llmProvider.Review(ctx, llmReq)
 	if err != nil {
-		result.Reasoning = truncateReasoning("Second LLM call failed", c.maxReasonLen)
+		result.Reasoning = truncateStr("Second LLM call failed", c.maxReasonLen)
 		return result
 	}
 
 	// Second call MUST return a verdict — another file request → deny.
 	if len(llmResp2.RequestFiles) > 0 {
 		result.Decision = "deny"
-		result.Reasoning = truncateReasoning("LLM requested files again (two-call maximum enforced)", c.maxReasonLen)
+		result.Reasoning = truncateStr("LLM requested files again (two-call maximum enforced)", c.maxReasonLen)
 		return result
 	}
 
 	result.Decision = llmResp2.Decision
-	result.Reasoning = truncateReasoning(c.scrubber.Text(llmResp2.Reasoning), c.maxReasonLen)
+	result.Reasoning = truncateStr(c.scrubber.Text(llmResp2.Reasoning), c.maxReasonLen)
 	result.RiskFactors = c.scrubRiskFactors(llmResp2.RiskFactors)
 	return result
 }
@@ -459,26 +459,17 @@ func (c *Classifier) buildASTTextSummary(cmds []rules.CommandInfo) string {
 	return strings.Join(parts, "\n")
 }
 
-// truncateReasoning truncates reasoning to maxLen runes for API responses.
-// maxLen == 0 means omit reasoning entirely (per spec: "Set to 0 to omit").
-// Uses rune count (not byte length) to avoid splitting multi-byte UTF-8 sequences.
-func truncateReasoning(reasoning string, maxLen int) string {
+// truncateStr truncates s to maxLen runes, appending "..." when truncated.
+// maxLen == 0 returns "" (spec: "Set to 0 to omit reasoning entirely").
+// maxLen < 0 returns s unchanged (no limit).
+// Uses rune count to avoid splitting multi-byte UTF-8 sequences.
+func truncateStr(s string, maxLen int) string {
 	if maxLen == 0 {
 		return ""
 	}
 	if maxLen < 0 {
-		return reasoning
+		return s
 	}
-	runes := []rune(reasoning)
-	if len(runes) <= maxLen {
-		return reasoning
-	}
-	return string(runes[:maxLen]) + "..."
-}
-
-// truncate is a convenience for short truncation (e.g., in reason strings).
-// Uses rune count for UTF-8 safety.
-func truncate(s string, maxLen int) string {
 	runes := []rune(s)
 	if len(runes) <= maxLen {
 		return s
@@ -493,7 +484,7 @@ func llmReasonString(prefix, reasoning string) string {
 	if reasoning == "" {
 		return prefix
 	}
-	return prefix + ": " + truncate(reasoning, 200)
+	return prefix + ": " + truncateStr(reasoning, 200)
 }
 
 // buildASTSummary derives an ASTSummary from the parsed CommandInfo slice.
