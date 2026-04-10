@@ -12,16 +12,19 @@ import (
 	"time"
 
 	"github.com/limbic-systems/stargate/internal/config"
+	"github.com/limbic-systems/stargate/internal/ttlmap"
 
 	_ "modernc.org/sqlite" // SQLite driver
 )
 
 // Corpus is an SQLite-backed store of past classification judgments.
 type Corpus struct {
-	db     *sql.DB
-	cfg    config.CorpusConfig
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	db              *sql.DB
+	cfg             config.CorpusConfig
+	cancel          context.CancelFunc
+	wg              sync.WaitGroup
+	sigRateLimit    *ttlmap.TTLMap[string, struct{}]
+	globalRateLimit *ttlmap.TTLMap[string, int]
 }
 
 // Open creates or opens the corpus database at the configured path.
@@ -84,6 +87,9 @@ func Open(ctx context.Context, cfg config.CorpusConfig) (*Corpus, error) {
 		cfg:    cfg,
 		cancel: cancel,
 	}
+
+	// Initialize rate limiters.
+	c.initRateLimiters(ctx)
 
 	// Start background pruning.
 	c.wg.Add(1)
