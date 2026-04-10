@@ -517,16 +517,16 @@ min_similarity = 0.7
 max_precedents_per_decision = 3
 
 # ---------------------------------------------------------------------------
-# Exact Hit Behavior
+# Command Cache — in-memory exact-command deduplication
 # ---------------------------------------------------------------------------
-# When an exact structural match exists in the corpus, stargate can either
-# return the cached decision directly (skipping the LLM) or include it as
-# a high-confidence precedent in a fresh LLM call.
-#
-# The corpus's primary purpose is building case law for LLM consistency,
-# not caching. Default is conservative: exact hits are treated as precedents,
-# not automatic decisions.
-exact_hit_mode = "precedent"  # "precedent" (default) or "auto_decide"
+# When a YELLOW+llm_review command is classified, the verdict is cached in
+# memory keyed on SHA-256(scrubbed_command + cwd). Subsequent identical
+# commands return the cached decision without an LLM call. This is a
+# performance cache: in-memory only, lost on restart, invalidated on
+# config reload (SIGHUP). The corpus is the long-term memory; the cache
+# is ephemeral.
+command_cache_enabled = true
+command_cache_ttl = "1h"
 
 # ---------------------------------------------------------------------------
 # Corpus Lifecycle

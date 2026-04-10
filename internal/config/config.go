@@ -182,7 +182,8 @@ type CorpusConfig struct {
 	Path                     string  `toml:"path"`
 	MaxPrecedents            int     `toml:"max_precedents"`
 	MinSimilarity            float64 `toml:"min_similarity"`
-	ExactHitMode             string  `toml:"exact_hit_mode"`
+	CommandCacheEnabled      bool    `toml:"command_cache_enabled"`
+	CommandCacheTTL          string  `toml:"command_cache_ttl"`
 	MaxAge                   string  `toml:"max_age"`
 	MaxEntries               int     `toml:"max_entries"`
 	PruneInterval            string  `toml:"prune_interval"`
@@ -301,8 +302,8 @@ func applyDefaults(cfg *Config) {
 	if cfg.Commands == nil {
 		cfg.Commands = DefaultCommandFlags()
 	}
-	if cfg.Corpus.ExactHitMode == "" {
-		cfg.Corpus.ExactHitMode = "precedent"
+	if cfg.Corpus.CommandCacheTTL == "" {
+		cfg.Corpus.CommandCacheTTL = "1h"
 	}
 }
 
@@ -452,9 +453,8 @@ func (cfg *Config) Validate() error {
 	}
 
 	// --- Corpus ---
-	validExactHitModes := map[string]bool{"": true, "precedent": true, "auto_decide": true}
-	if !validExactHitModes[cfg.Corpus.ExactHitMode] {
-		return fmt.Errorf("config: corpus.exact_hit_mode must be precedent or auto_decide; got %q", cfg.Corpus.ExactHitMode)
+	if err := parseDuration("corpus.command_cache_ttl", cfg.Corpus.CommandCacheTTL); err != nil {
+		return err
 	}
 	if cfg.Corpus.MinSimilarity < 0 || cfg.Corpus.MinSimilarity > 1 {
 		return fmt.Errorf("config: corpus.min_similarity must be between 0.0 and 1.0; got %f", cfg.Corpus.MinSimilarity)

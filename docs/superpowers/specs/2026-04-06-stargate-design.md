@@ -905,16 +905,26 @@ min_similarity = 0.7
 max_precedents_per_decision = 3
 
 # ---------------------------------------------------------------------------
-# Exact Hit Behavior
+# Command Cache — in-memory exact-command deduplication
 # ---------------------------------------------------------------------------
-# When an exact structural match exists in the corpus, stargate can either
-# return the cached decision directly (skipping the LLM) or include it as
-# a high-confidence precedent in a fresh LLM call.
+# When a YELLOW+llm_review command is classified, the verdict is cached in
+# memory keyed on SHA-256(scrubbed_command + cwd). Subsequent identical
+# commands return the cached decision without an LLM call.
 #
-# The corpus's primary purpose is building case law for LLM consistency,
-# not caching. Default is conservative: exact hits are treated as precedents,
-# not automatic decisions.
-exact_hit_mode = "precedent"  # "precedent" (default) or "auto_decide"
+# This is a performance cache, not a permanent approval. It is:
+#   - In-memory only (lost on restart)
+#   - Invalidated on config reload (SIGHUP) — rules/scopes may have changed
+#   - Short-lived (cache_ttl, default 1h)
+#   - Keyed on the EXACT scrubbed command + CWD, not structural signature
+#
+# The corpus (below) is the long-term memory. The command cache is ephemeral.
+# They are independent: a cache hit does not write to or read from the corpus.
+
+# Enable the command cache. Set to false to always call the LLM.
+command_cache_enabled = true
+
+# Time-to-live for cached decisions.
+command_cache_ttl = "1h"
 
 # ---------------------------------------------------------------------------
 # Corpus Lifecycle
@@ -1617,16 +1627,23 @@ Dry-run alias for `/classify`. Same schema, same response. Intended for rule dev
          │ (llm_review=true)
          ▼
   ┌─────────────┐
-  │  6. CORPUS  │  Compute structural signature from []CommandInfo
+  │ 6. COMMAND  │  Check in-memory command cache:
+  │   CACHE     │  SHA-256(scrubbed_command + cwd)
+  │             │  HIT → return cached decision (no LLM call)
+  │             │  MISS → continue
+  └──────┬──────┘
+         │ (cache miss)
+         ▼
+  ┌─────────────┐
+  │  7. CORPUS  │  Compute structural signature from []CommandInfo
   │   LOOKUP    │  Query SQLite for similar past judgments
   │             │  Attach matching precedents for the LLM prompt
-  │             │  (If exact_hit_mode="auto_decide" and exact match
-  │             │   found → return cached decision, skip LLM)
+  │             │  (precedents are context, never auto-decisions)
   └──────┬──────┘
          │
          ▼
   ┌─────────────┐
-  │  7. LLM     │  Call LLM with command + AST summary + context
+  │  8. LLM     │  Call LLM with command + AST summary + context
   │   REVIEW    │  + precedents from corpus + scopes
   │             │  Parse response → allow/deny
   │             │  If LLM requests files → resolve, re-call with contents
@@ -1635,10 +1652,16 @@ Dry-run alias for `/classify`. Same schema, same response. Intended for rule dev
          │
          ▼
   ┌─────────────┐
-  │  8. CORPUS  │  Store the new LLM judgment in SQLite:
+  │  9. CORPUS  │  Store the new LLM judgment in SQLite:
   │   WRITE     │  signature, decision, reasoning, risk_factors,
   │             │  raw command, AST summary, scopes in play,
   │             │  cwd, timestamp
+  └──────┬──────┘
+         │
+         ▼
+  ┌─────────────┐
+  │ 10. CACHE   │  Write to command cache:
+  │   WRITE     │  SHA-256(scrubbed_command + cwd) → decision
   └──────┬──────┘
          │
          ▼
@@ -1844,7 +1867,7 @@ The evaluation result carries:
 When a YELLOW rule with `llm_review = true` matches:
 
 1. **Compute structural signature.** Generate a normalized fingerprint from the AST — the sorted sequence of `(command_name, subcommand, flags_sorted, context)` tuples. Arguments are excluded because they vary between invocations.
-2. **Query the precedent corpus.** Search SQLite for entries with similar signatures. Attach matching precedents (up to `max_precedents`) to the LLM prompt. If `exact_hit_mode = "auto_decide"` and an exact match exists, return the cached decision directly.
+2. **Query the precedent corpus.** Search SQLite for entries with similar signatures. Attach matching precedents (up to `max_precedents`) to the LLM prompt. Exact structural matches are treated as high-confidence precedents, not automatic decisions — the LLM always makes an independent judgment.
 3. **Scrub secrets from command data.** Before prompt construction, a scrubbing pass is applied to prevent secrets from leaking to the LLM:
    - **CommandInfo field coverage:** Every field that could contain secrets must be scrubbed. The scrubber produces a sanitized copy with: `Env` values replaced with `[REDACTED]`, `Args` scrubbed via token patterns, `Flags` scrubbed (captures `--token=ghp_abc` → `--token=[REDACTED]`), `Subcommand` scrubbed, `Redirects[].File` scrubbed, `RawNode` cleared (prevents AST pointer from reintroducing raw data). The original `CommandInfo` is not modified.
    - Strips values from `CommandInfo.Env` assignments (e.g., `GITHUB_TOKEN=ghp_xxx` -> `GITHUB_TOKEN=[REDACTED]`).
