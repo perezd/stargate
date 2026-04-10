@@ -16,6 +16,7 @@ var ErrRateLimited = errors.New("corpus: write rate limited")
 
 // PrecedentEntry represents a corpus entry for writing or reading.
 type PrecedentEntry struct {
+	ID            int64      // set on read; ignored on write (autoincrement)
 	Signature     string
 	SignatureHash string
 	RawCommand    string

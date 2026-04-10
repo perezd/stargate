@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -14,6 +15,8 @@ import (
 	"time"
 
 	"github.com/limbic-systems/stargate/internal/config"
+	"github.com/limbic-systems/stargate/internal/corpus"
+	"github.com/limbic-systems/stargate/internal/parser"
 	"github.com/limbic-systems/stargate/internal/server"
 )
 
@@ -234,8 +237,419 @@ func handleConfigValidate(configPath string, _ bool) int {
 }
 
 func handleCorpus(args []string, configPath string, verbose bool) int {
-	fmt.Fprintln(os.Stderr, "corpus: not implemented")
-	return 1
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: stargate corpus <stats|search|inspect|invalidate|clear|export|import>")
+		return 1
+	}
+
+	switch args[0] {
+	case "stats":
+		return handleCorpusStats(args[1:], configPath, verbose)
+	case "search":
+		return handleCorpusSearch(args[1:], configPath, verbose)
+	case "inspect":
+		return handleCorpusInspect(args[1:], configPath, verbose)
+	case "invalidate":
+		return handleCorpusInvalidate(args[1:], configPath, verbose)
+	case "clear":
+		return handleCorpusClear(args[1:], configPath, verbose)
+	case "export":
+		return handleCorpusExport(args[1:], configPath, verbose)
+	case "import":
+		return handleCorpusImport(args[1:], configPath, verbose)
+	default:
+		fmt.Fprintf(os.Stderr, "corpus: unknown subcommand %q\n", args[0])
+		return 1
+	}
+}
+
+// openCorpusDB loads config and opens the corpus database.
+// Returns nil corpus and prints an error on failure.
+func openCorpusDB(configPath string) (*corpus.Corpus, error) {
+	if configPath == "" {
+		return nil, fmt.Errorf("no config file found; pass --config or set STARGATE_CONFIG")
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load config: %w", err)
+	}
+	if !cfg.Corpus.Enabled {
+		return nil, fmt.Errorf("corpus is disabled in config (corpus.enabled = false)")
+	}
+	if cfg.Corpus.Path == "" {
+		return nil, fmt.Errorf("corpus.path is not set in config")
+	}
+	c, err := corpus.Open(context.Background(), cfg.Corpus)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open corpus: %w", err)
+	}
+	return c, nil
+}
+
+func handleCorpusStats(args []string, configPath string, _ bool) int {
+	c, err := openCorpusDB(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "corpus stats: %v\n", err)
+		return 1
+	}
+	defer c.Close()
+
+	stats, err := c.Stats()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "corpus stats: %v\n", err)
+		return 1
+	}
+
+	fmt.Printf("Total entries: %d\n", stats.TotalEntries)
+
+	// Decisions in deterministic order.
+	for _, decision := range []string{"allow", "deny", "user_approved"} {
+		count := stats.ByDecision[decision]
+		fmt.Printf("  %s: %d\n", decision, count)
+	}
+	// Print any unexpected decisions too.
+	for decision, count := range stats.ByDecision {
+		if decision != "allow" && decision != "deny" && decision != "user_approved" {
+			fmt.Printf("  %s: %d\n", decision, count)
+		}
+	}
+
+	if stats.HasEntries {
+		fmt.Printf("Oldest entry: %s\n", stats.OldestEntry.Format(time.RFC3339))
+		fmt.Printf("Newest entry: %s\n", stats.NewestEntry.Format(time.RFC3339))
+	} else {
+		fmt.Println("Oldest entry: (none)")
+		fmt.Println("Newest entry: (none)")
+	}
+
+	// DB file size: resolve path from config.
+	cfg, err := config.Load(configPath)
+	if err == nil {
+		dbPath := cfg.Corpus.Path
+		if len(dbPath) > 1 && dbPath[:2] == "~/" {
+			if home, err := os.UserHomeDir(); err == nil {
+				dbPath = home + "/" + dbPath[2:]
+			}
+		}
+		if info, err := os.Stat(dbPath); err == nil {
+			fmt.Printf("DB file size: %d bytes\n", info.Size())
+		}
+	}
+
+	return 0
+}
+
+func handleCorpusSearch(args []string, configPath string, _ bool) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: stargate corpus search <command>")
+		return 1
+	}
+
+	command := strings.Join(args, " ")
+
+	c, err := openCorpusDB(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "corpus search: %v\n", err)
+		return 1
+	}
+	defer c.Close()
+
+	// Load config for lookup parameters.
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "corpus search: load config: %v\n", err)
+		return 1
+	}
+
+	// Parse and walk the command to get CommandInfo.
+	cmds, err := parser.ParseAndWalk(command, "bash", nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "corpus search: parse command: %v\n", err)
+		return 1
+	}
+
+	signature, _ := corpus.ComputeSignature(cmds)
+	cmdNames := corpus.CommandNames(cmds)
+
+	// Build lookup config from corpus config defaults.
+	maxAge := 90 * 24 * time.Hour
+	if cfg.Corpus.MaxAge != "" {
+		if d, err := time.ParseDuration(cfg.Corpus.MaxAge); err == nil {
+			maxAge = d
+		} else {
+			var days int
+			if _, err := fmt.Sscanf(cfg.Corpus.MaxAge, "%dd", &days); err == nil {
+				maxAge = time.Duration(days) * 24 * time.Hour
+			}
+		}
+	}
+
+	minSim := cfg.Corpus.MinSimilarity
+	if minSim <= 0 {
+		minSim = 0.0
+	}
+	maxPrecedents := cfg.Corpus.MaxPrecedents
+	if maxPrecedents <= 0 {
+		maxPrecedents = 10
+	}
+	maxPerPolarity := cfg.Corpus.MaxPrecedentsPerPolarity
+	if maxPerPolarity <= 0 {
+		maxPerPolarity = 5
+	}
+
+	lookupCfg := corpus.LookupConfig{
+		MinSimilarity:  minSim,
+		MaxPrecedents:  maxPrecedents,
+		MaxPerPolarity: maxPerPolarity,
+		MaxAge:         maxAge,
+	}
+
+	results, err := c.LookupSimilar(cmdNames, signature, lookupCfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "corpus search: lookup: %v\n", err)
+		return 1
+	}
+
+	if len(results) == 0 {
+		fmt.Println("No similar precedents found.")
+		return 0
+	}
+
+	for _, r := range results {
+		age := time.Since(r.CreatedAt)
+		ageStr := formatAge(age)
+		reasoning := r.Reasoning
+		if len(reasoning) > 80 {
+			reasoning = reasoning[:77] + "..."
+		}
+		rawCmd := r.RawCommand
+		if rawCmd == "" {
+			rawCmd = "(no raw command stored)"
+		}
+		fmt.Printf("ID: %d  decision: %-12s  similarity: %.2f  age: %s\n",
+			r.CreatedAt.UnixNano(), r.Decision, r.Similarity, ageStr)
+		fmt.Printf("  command:   %s\n", rawCmd)
+		if reasoning != "" {
+			fmt.Printf("  reasoning: %s\n", reasoning)
+		}
+		fmt.Println()
+	}
+
+	return 0
+}
+
+func handleCorpusInspect(args []string, configPath string, _ bool) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: stargate corpus inspect <id>")
+		return 1
+	}
+
+	var id int64
+	if _, err := fmt.Sscanf(args[0], "%d", &id); err != nil {
+		fmt.Fprintf(os.Stderr, "corpus inspect: invalid id %q: %v\n", args[0], err)
+		return 1
+	}
+
+	c, err := openCorpusDB(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "corpus inspect: %v\n", err)
+		return 1
+	}
+	defer c.Close()
+
+	entry, err := c.GetByID(id)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "corpus inspect: %v\n", err)
+		return 1
+	}
+
+	fmt.Printf("ID:            %d\n", id)
+	fmt.Printf("Decision:      %s\n", entry.Decision)
+	fmt.Printf("Raw command:   %s\n", entry.RawCommand)
+	fmt.Printf("Command names: %s\n", strings.Join(entry.CommandNames, ", "))
+	fmt.Printf("Flags:         %s\n", strings.Join(entry.Flags, " "))
+	fmt.Printf("Signature:     %s\n", entry.Signature)
+	fmt.Printf("Sig hash:      %s\n", entry.SignatureHash)
+	if entry.ASTSummary != "" {
+		fmt.Printf("AST summary:   %s\n", entry.ASTSummary)
+	}
+	if entry.CWD != "" {
+		fmt.Printf("CWD:           %s\n", entry.CWD)
+	}
+	if entry.Reasoning != "" {
+		fmt.Printf("Reasoning:     %s\n", entry.Reasoning)
+	}
+	if len(entry.RiskFactors) > 0 {
+		fmt.Printf("Risk factors:  %s\n", strings.Join(entry.RiskFactors, ", "))
+	}
+	if entry.MatchedRule != "" {
+		fmt.Printf("Matched rule:  %s\n", entry.MatchedRule)
+	}
+	if len(entry.ScopesInPlay) > 0 {
+		fmt.Printf("Scopes:        %s\n", strings.Join(entry.ScopesInPlay, ", "))
+	}
+	if entry.TraceID != "" {
+		fmt.Printf("Trace ID:      %s\n", entry.TraceID)
+	}
+	if entry.SessionID != "" {
+		fmt.Printf("Session ID:    %s\n", entry.SessionID)
+	}
+	if entry.Agent != "" {
+		fmt.Printf("Agent:         %s\n", entry.Agent)
+	}
+	fmt.Printf("Created at:    %s\n", entry.CreatedAt.Format(time.RFC3339))
+	if entry.LastHitAt != nil {
+		fmt.Printf("Last hit at:   %s\n", entry.LastHitAt.Format(time.RFC3339))
+	}
+	fmt.Printf("Hit count:     %d\n", entry.HitCount)
+
+	return 0
+}
+
+func handleCorpusInvalidate(args []string, configPath string, _ bool) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: stargate corpus invalidate <id>")
+		return 1
+	}
+
+	var id int64
+	if _, err := fmt.Sscanf(args[0], "%d", &id); err != nil {
+		fmt.Fprintf(os.Stderr, "corpus invalidate: invalid id %q: %v\n", args[0], err)
+		return 1
+	}
+
+	c, err := openCorpusDB(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "corpus invalidate: %v\n", err)
+		return 1
+	}
+	defer c.Close()
+
+	n, err := c.DeleteByID(id)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "corpus invalidate: %v\n", err)
+		return 1
+	}
+
+	if n == 0 {
+		fmt.Fprintf(os.Stderr, "corpus invalidate: no entry found with id %d\n", id)
+		return 1
+	}
+
+	fmt.Fprintf(os.Stderr, "corpus: invalidated precedent %d\n", id)
+	fmt.Printf("Invalidated precedent %d.\n", id)
+	return 0
+}
+
+func handleCorpusClear(args []string, configPath string, _ bool) int {
+	confirmed := false
+	for _, arg := range args {
+		if arg == "--confirm" {
+			confirmed = true
+		}
+	}
+
+	if !confirmed {
+		fmt.Fprintln(os.Stderr, "corpus clear: requires --confirm flag to delete all entries")
+		return 1
+	}
+
+	c, err := openCorpusDB(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "corpus clear: %v\n", err)
+		return 1
+	}
+	defer c.Close()
+
+	n, err := c.DeleteAll()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "corpus clear: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(os.Stderr, "corpus: cleared all precedents\n")
+	fmt.Printf("Cleared %d entries.\n", n)
+	return 0
+}
+
+func handleCorpusExport(args []string, configPath string, _ bool) int {
+	c, err := openCorpusDB(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "corpus export: %v\n", err)
+		return 1
+	}
+	defer c.Close()
+
+	entries, err := c.ExportAll()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "corpus export: %v\n", err)
+		return 1
+	}
+
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(entries); err != nil {
+		fmt.Fprintf(os.Stderr, "corpus export: encode json: %v\n", err)
+		return 1
+	}
+
+	return 0
+}
+
+func handleCorpusImport(args []string, configPath string, _ bool) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: stargate corpus import <file>")
+		return 1
+	}
+
+	filePath := args[0]
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "corpus import: read file: %v\n", err)
+		return 1
+	}
+
+	var entries []corpus.PrecedentEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		fmt.Fprintf(os.Stderr, "corpus import: parse JSON: %v\n", err)
+		return 1
+	}
+
+	c, err := openCorpusDB(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "corpus import: %v\n", err)
+		return 1
+	}
+	defer c.Close()
+
+	imported := 0
+	for i, entry := range entries {
+		if err := c.ImportEntry(entry); err != nil {
+			fmt.Fprintf(os.Stderr, "corpus import: entry %d: %v\n", i, err)
+			// Continue importing remaining entries.
+			continue
+		}
+		imported++
+	}
+
+	fmt.Printf("Imported %d entries.\n", imported)
+	return 0
+}
+
+// formatAge returns a human-readable age string.
+func formatAge(age time.Duration) string {
+	switch {
+	case age < time.Hour:
+		mins := int(age.Minutes())
+		if mins < 1 {
+			mins = 1
+		}
+		return fmt.Sprintf("%dm ago", mins)
+	case age < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(age.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(age.Hours()/24))
+	}
 }
 
 // parseGlobalArgs parses global flags from args (typically os.Args[1:]).
