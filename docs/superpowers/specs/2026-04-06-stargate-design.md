@@ -1640,7 +1640,7 @@ Dry-run alias for `/classify`. Same schema, same response. Intended for rule dev
          ▼
   ┌─────────────┐
   │ 6. COMMAND  │  Check in-memory command cache:
-  │   CACHE     │  SHA-256(scrubbed_command + cwd)
+  │   CACHE     │  SHA-256(raw_command + cwd)
   │             │  HIT → return cached decision (no LLM call)
   │             │  MISS → continue
   └──────┬──────┘
@@ -1673,7 +1673,7 @@ Dry-run alias for `/classify`. Same schema, same response. Intended for rule dev
          ▼
   ┌─────────────┐
   │ 10. CACHE   │  Write to command cache:
-  │   WRITE     │  SHA-256(scrubbed_command + cwd) → decision
+  │   WRITE     │  SHA-256(raw_command + cwd) → decision
   └──────┬──────┘
          │
          ▼
