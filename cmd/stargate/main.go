@@ -126,6 +126,18 @@ func handleServe(args []string, configPath string, verbose bool) int {
 	}
 	cfg.Version = Version
 
+	// Capture the server's working directory (symlink-resolved) for file
+	// retrieval path anchoring. Set once at startup, not per-request.
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "serve: failed to determine working directory: %v\n", err)
+		return 1
+	}
+	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = resolved
+	}
+	cfg.ServerCWD = cwd
+
 	listenAddr := cfg.Server.Listen
 	if listenOverride != "" {
 		// The --listen flag bypasses config validation, so validate here.
