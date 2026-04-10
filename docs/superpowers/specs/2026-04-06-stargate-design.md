@@ -133,14 +133,14 @@ The first-class implementation uses the Anthropic Go SDK (`github.com/anthropics
 
 #### Anthropic Authentication
 
-The Anthropic provider supports two authentication mechanisms with automatic fallback:
+Authentication is via **environment variables only** — no secrets in the config file.
 
-1. **Direct API key** — `ANTHROPIC_API_KEY` env var or `llm.api_key` in config. Calls the Anthropic Messages API directly via the SDK. Fast, no subprocess overhead.
-2. **Claude Code OAuth token** — `CLAUDE_CODE_OAUTH_TOKEN` env var (automatically available inside Claude Code sessions). Shells out to `claude -p --model <model> --max-turns 1 -` with the prompt piped via stdin. Slightly slower due to subprocess overhead, but requires zero additional credentials.
+1. **`ANTHROPIC_API_KEY`** env var → direct SDK calls via the Anthropic Messages API. Fast, no subprocess overhead.
+2. **`CLAUDE_CODE_OAUTH_TOKEN`** env var → shells out to `claude -p --model <model> --max-turns 1 -` with the prompt piped via stdin. Requires the `claude` binary on PATH (verified via `exec.LookPath` before attempting). Slightly slower due to subprocess overhead, but requires zero additional credentials.
 
-Resolution order: direct API key is preferred when available (faster). If no API key is configured, falls back to OAuth token — but only after verifying the `claude` binary exists via `exec.LookPath("claude")`. If the binary is not found, the OAuth path is skipped (avoids repeated subprocess failures on every YELLOW classification). If neither auth mechanism is available, LLM review is disabled — all `llm_review = true` commands fall through to YELLOW (ask user) with a logged warning.
+Resolution order: API key is preferred when available (faster). If no API key is set, falls back to OAuth token + CLI. If neither is available, LLM review is disabled — all `llm_review = true` commands fall through to YELLOW (ask user) with a logged warning.
 
-This means stargate works out of the box inside a Claude Code session with no API key configuration. For faster LLM calls or use outside of Claude Code, provide an API key.
+This means stargate works out of the box inside a Claude Code session with no configuration. For faster LLM calls or use outside of Claude Code, set `ANTHROPIC_API_KEY`.
 
 **subprocess invocation:** The subprocess MUST be invoked via `exec.Command` array form — `exec.Command("claude", "-p", "--model", model, "--max-turns", "1", "-")` — with the prompt piped via `cmd.Stdin`. Shell interpolation (e.g., `sh -c`) is NEVER used; the command string contains attacker-influenced content and shell interpolation would introduce injection risk.
 
@@ -153,9 +153,9 @@ Configuration:
 provider = "anthropic"  # default; future: "openai", "google", "ollama"
 model = "claude-sonnet-4-6"
 
-# Optional. If omitted, falls back to ANTHROPIC_API_KEY env var,
-# then CLAUDE_CODE_OAUTH_TOKEN env var (via claude -p).
-# api_key = "sk-ant-..."
+# Authentication via env vars only (no secrets in config):
+#   ANTHROPIC_API_KEY → direct SDK calls
+#   CLAUDE_CODE_OAUTH_TOKEN + claude on PATH → subprocess
 ```
 
 ### 3.4 Configuration Format: TOML
@@ -1846,11 +1846,14 @@ When a YELLOW rule with `llm_review = true` matches:
 1. **Compute structural signature.** Generate a normalized fingerprint from the AST — the sorted sequence of `(command_name, subcommand, flags_sorted, context)` tuples. Arguments are excluded because they vary between invocations.
 2. **Query the precedent corpus.** Search SQLite for entries with similar signatures. Attach matching precedents (up to `max_precedents`) to the LLM prompt. If `exact_hit_mode = "auto_decide"` and an exact match exists, return the cached decision directly.
 3. **Scrub secrets from command data.** Before prompt construction, a scrubbing pass is applied to prevent secrets from leaking to the LLM:
+   - **CommandInfo field coverage:** Every field that could contain secrets must be scrubbed. The scrubber produces a sanitized copy with: `Env` values replaced with `[REDACTED]`, `Args` scrubbed via token patterns, `Flags` scrubbed (captures `--token=ghp_abc` → `--token=[REDACTED]`), `Subcommand` scrubbed, `Redirects[].File` scrubbed, `RawNode` cleared (prevents AST pointer from reintroducing raw data). The original `CommandInfo` is not modified.
    - Strips values from `CommandInfo.Env` assignments (e.g., `GITHUB_TOKEN=ghp_xxx` -> `GITHUB_TOKEN=[REDACTED]`).
-   - Applies regex patterns for common token formats in arguments: `ghp_[a-zA-Z0-9]+`, `sk-ant-[a-zA-Z0-9]+`, `glc_[a-zA-Z0-9]+`, `Bearer [a-zA-Z0-9._-]+`, `token=[a-zA-Z0-9._-]+`, and other common secret patterns.
-   - Scrubs URL credentials: strips the `userinfo` component from URLs per RFC 3986 (e.g., `https://user:pass@host/path` → `https://[REDACTED]@host/path`).
+   - Applies regex patterns for common token formats. Patterns with meaningful prefixes preserve the prefix for classification context: `Bearer [REDACTED]` (not `[REDACTED]`), `token=[REDACTED]` (not `[REDACTED]`). Patterns are case-insensitive for `Bearer` and `token=`.
+   - Scrubs URL credentials: strips the `userinfo` component from URLs per RFC 3986 (e.g., `https://user:pass@host/path` → `https://[REDACTED]@host/path`). The regex constrains matching to the authority portion (before first `/`, `?`, `#`) to avoid false positives on paths like `https://example.com/@user`.
+   - Env var regex matches POSIX-convention uppercase names only (`[A-Z_][A-Z0-9_]*`) and stops before shell metacharacters (`;|&()<>`) to preserve adjacent operators. Quoted values are partially matched; the AST-level `CommandInfo.Env` scrubbing handles quoted assignments correctly.
    - The redacted command is what populates `{{command}}` in the prompt template — the original command string is never sent to the LLM.
    - The AST summary (`{{ast_summary}}`) also uses redacted values from the scrubbed `CommandInfo`.
+   - **LLM reasoning and risk_factors are scrubbed** before inclusion in the API response or corpus — the LLM may echo secrets from the command or file contents.
    - Redaction is one-way: the original values are available to the rule engine and resolvers (which run before the LLM step) but are never included in any LLM-bound data.
    - Scrubbing regex patterns (built-in and `extra_patterns`) are compiled once at config load time and reused across requests. Recompilation occurs only on config hot-reload.
    - **Future: scope-contributed patterns.** The current built-in patterns are a global cross-domain list. A future improvement (deferred to M8 hardening) would let resolvers contribute domain-specific scrub patterns — e.g., the `github_repo_owner` resolver declares `ghp_` and `github_pat_` patterns, the `k8s_context` resolver declares kubeconfig token patterns. This could be expressed via a `PatternContributor` interface on resolvers, or as `scrub_patterns` metadata in resolver config. The benefit is co-location of domain knowledge: the code that understands a token format is the same code that scrubs it. The current `extra_patterns` config covers operator customization in the interim.

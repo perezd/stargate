@@ -1379,6 +1379,76 @@ git commit -m "feat(rules): integrate scope-bound rule matching via resolvers"
 
 ## M4: LLM Review
 
+> **M4 Retrospective (post-implementation):** 91 threads, 38 Copilot reviews across
+> 2 PRs (PR#8: 41 threads/17 reviews, PR#9: 50 threads/21 reviews). This is a
+> significant regression from M3 (28 threads) driven by the split-PR approach and
+> the security-critical nature of the LLM subsystem. However, the findings were
+> overwhelmingly high-quality — several would have been genuine vulnerabilities.
+>
+> **The split-PR approach amplified the review tail.** Each PR triggered independent
+> review cycles, and cross-PR context was lost (Copilot flagged config fields as
+> "unused" in PR#1 because the consumers were in PR#2). For future milestones,
+> prefer 1 larger PR unless the code is truly independent.
+>
+> **Five patterns drove the 91 threads:**
+>
+> 1. **Secret scrubbing completeness (25 threads)** — The scrubber was iteratively
+>    hardened across 8 rounds: flags, subcommand, redirects, URL credentials, env
+>    var metacharacter adjacency, Bearer/token= prefix preservation, case
+>    sensitivity, Text() for .env files, and LLM reasoning/risk_factors. **Lesson:**
+>    When implementing a redaction pipeline, enumerate every field in every struct
+>    that touches untrusted data, then verify each is scrubbed. The spec listed the
+>    pipeline steps but not every field that flows through them.
+>
+> 2. **Prompt injection defense (18 threads)** — XML fence tag stripping required 6
+>    iterations: opening+closing tags, attribute handling, prefix matching boundary,
+>    recursive nesting fail-closed, Unicode confusables, and the system/user prompt
+>    split. Template injection via sequential ReplaceAll, CWD injection into the
+>    system prompt, and the REMINDER placement (system vs user content) were all
+>    caught by review. **Lesson:** Prompt construction is a security-critical parser
+>    — treat it with the same rigor as the shell parser. Enumerate injection vectors
+>    in the spec, not just the defense mechanisms.
+>
+> 3. **API contract consistency (15 threads)** — null vs [] in JSON, reasoning
+>    truncation semantics (0 = omit), trailing colon on empty reasoning, FullPath
+>    leaking resolved symlinks, step numbering, comment accuracy. **Lesson:** Define
+>    the JSON wire format exhaustively in the spec (including null vs empty, edge
+>    cases for each config value), and write contract tests that serialize and verify.
+>
+> 4. **Config/lifecycle issues (12 threads)** — MaxCallsPerMinute 0 vs nil semantics,
+>    ServerCWD not set in test configs, api_key removal (env-only auth), provider
+>    validation, config fields unused in split PR. **Lesson:** The *int pointer
+>    pattern for "0 means disabled, nil means default" should be decided at design
+>    time, not discovered through review. Config lifecycle (what's set in Load vs
+>    startup vs per-request) should be explicit in the spec.
+>
+> 5. **Copilot stale/duplicate observations (21 threads)** — Copilot repeatedly
+>    flagged already-fixed issues from stale diffs, and made 2 incorrect claims
+>    (null → string in Go, dead mock variable). **Lesson:** The review loop protocol
+>    works but generates churn from stale observations. Consider squash-committing
+>    review fixes to reduce diff noise between rounds, and track stale thread IDs
+>    to avoid re-processing.
+>
+> **What the panel review prevented:** The 3-round expert panel before implementation
+> caught 17 issues including: unbounded file retrieval (C1), symlink bypass (H1),
+> shell interpolation in subprocess (H3), and unscoped file reads. The code review
+> still found additional issues the panel missed: recursive fence tag nesting,
+> deny-glob fail-open, and template injection via sequential replacement.
+>
+> **Key design decisions made during review (not in original spec):**
+> - Auth is env-only (no api_key in config) — secrets don't touch disk
+> - ServerCWD captured in config.Load with EvalSymlinks — trusted once
+> - MaxCallsPerMinute uses *int for nil/0 disambiguation
+> - BuildPrompt takes custom system prompt template parameter
+> - Scrubber uses (pattern, replacement) pairs for prefix preservation
+> - Fence stripping fails closed (escapes < >) when iteration budget exhausted
+>
+> **Trend:** M1: 84 → M2: 61 → M3: 28 → M4: 91. The regression is from scope
+> (M4 is the largest milestone — 3000+ lines, 2 PRs, security-critical LLM
+> integration) and the split-PR amplification. Per-line thread density is actually
+> comparable to M3. For M5 (Precedent Corpus), the scope is smaller and should
+> return to the M3 trajectory.
+
 Goal: Provider interface, Anthropic implementation, prompt templating with XML fence security, file retrieval, secret scrubbing. Incorporates all findings from 3 rounds of expert panel review.
 
 ### Task 4.1: Secret scrubbing
