@@ -177,6 +177,10 @@ func handleServe(args []string, configPath string, verbose bool) int {
 			fmt.Fprintf(os.Stderr, "serve: shutdown error: %v\n", err)
 			return 1
 		}
+		if err := srv.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "serve: close error: %v\n", err)
+			return 1
+		}
 	case err := <-errCh:
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "serve: %v\n", err)

@@ -56,9 +56,13 @@ func (c *Corpus) initRateLimiters(ctx context.Context) {
 // Returns ErrRateLimited if the per-signature or global rate limit is exceeded.
 func (c *Corpus) Write(entry PrecedentEntry) error {
 	// Per-signature rate limit: 1 write per signature_hash per hour.
+	// Set the entry BEFORE the DB insert so concurrent callers see it and fail
+	// closed rather than racing past this check. A failed insert "wastes" one
+	// rate-limit slot — acceptable because it blocks rather than allows.
 	if _, exists := c.sigRateLimit.Get(entry.SignatureHash); exists {
 		return ErrRateLimited
 	}
+	c.sigRateLimit.Set(entry.SignatureHash, struct{}{}, time.Hour)
 
 	// Global rate limit: max_writes_per_minute from config.
 	if c.cfg.MaxWritesPerMinute > 0 {
@@ -114,9 +118,6 @@ func (c *Corpus) Write(entry PrecedentEntry) error {
 	if err != nil {
 		return fmt.Errorf("corpus: insert precedent: %w", err)
 	}
-
-	// Record in per-signature rate limiter — 1 hour TTL.
-	c.sigRateLimit.Set(entry.SignatureHash, struct{}{}, time.Hour)
 
 	return nil
 }

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -23,10 +24,13 @@ func ParseMaxAge(s string) (time.Duration, error) {
 	if d, err := time.ParseDuration(s); err == nil {
 		return d, nil
 	}
-	// Try "Nd" format for days (e.g., "90d", "7d").
-	var days int
-	if _, err := fmt.Sscanf(s, "%dd", &days); err == nil && days > 0 {
-		return time.Duration(days) * 24 * time.Hour, nil
+	// Try strict "Nd" format for days (e.g., "90d", "7d").
+	// Use regexp to reject trailing garbage like "90dxyz".
+	if matched, _ := regexp.MatchString(`^[1-9]\d*d$`, s); matched {
+		days, err := strconv.Atoi(strings.TrimSuffix(s, "d"))
+		if err == nil && days > 0 {
+			return time.Duration(days) * 24 * time.Hour, nil
+		}
 	}
 	return 0, fmt.Errorf("config: invalid max_age %q (use Go durations like \"1h\" or day-based like \"90d\")", s)
 }

@@ -44,6 +44,7 @@ type Classifier struct {
 	cmdCache        *CommandCache
 	feedbackHandler *feedback.Handler
 	hmacSecret      []byte
+	cancel          context.CancelFunc  // cancels the classifier-lifecycle context
 }
 
 // ClassifyRequest is the input to the classifier.
@@ -180,6 +181,10 @@ func New(cfg *config.Config) (*Classifier, error) {
 		}
 	}
 
+	// Create a classifier-lifecycle context so background goroutines started
+	// by CommandCache and feedback.Handler are properly stopped on Close.
+	lifecycleCtx, cancel := context.WithCancel(context.Background())
+
 	// Initialize command cache.
 	var cacheTTL time.Duration
 	if cfg.Corpus.CommandCacheTTL != "" {
@@ -187,14 +192,15 @@ func New(cfg *config.Config) (*Classifier, error) {
 	}
 	var cmdCache *CommandCache
 	if cfg.Corpus.CommandCacheEnabled {
-		cmdCache = NewCommandCache(context.Background(), cacheTTL, cfg.Corpus.CommandCacheMaxEntries)
+		cmdCache = NewCommandCache(lifecycleCtx, cacheTTL, cfg.Corpus.CommandCacheMaxEntries)
 	} else {
-		cmdCache = NewCommandCache(context.Background(), 0, 0) // no-op cache
+		cmdCache = NewCommandCache(lifecycleCtx, 0, 0) // no-op cache
 	}
 
 	// Generate HMAC secret for feedback tokens.
 	hmacSecret, err := feedback.GenerateSecret()
 	if err != nil {
+		cancel()
 		if c != nil {
 			c.Close()
 		}
@@ -202,7 +208,7 @@ func New(cfg *config.Config) (*Classifier, error) {
 	}
 
 	// Create feedback handler.
-	feedbackHandler := feedback.NewHandler(context.Background(), c, hmacSecret)
+	feedbackHandler := feedback.NewHandler(lifecycleCtx, c, hmacSecret)
 
 	return &Classifier{
 		engine:          eng,
@@ -223,6 +229,7 @@ func New(cfg *config.Config) (*Classifier, error) {
 		cmdCache:        cmdCache,
 		feedbackHandler: feedbackHandler,
 		hmacSecret:      hmacSecret,
+		cancel:          cancel,
 	}, nil
 }
 
@@ -352,7 +359,9 @@ func (c *Classifier) Classify(ctx context.Context, req ClassifyRequest) *Classif
 		}
 	}
 
-	// 7. Generate feedback token for YELLOW decisions.
+	// 7. Generate feedback token for YELLOW decisions — only when tool_use_id
+	// is present. Without it we cannot correlate feedback to a specific tool
+	// invocation, so we skip token generation and trace recording entirely.
 	if resp.Decision == "yellow" {
 		toolUseID := ""
 		if req.Context != nil {
@@ -360,31 +369,33 @@ func (c *Classifier) Classify(ctx context.Context, req ClassifyRequest) *Classif
 				toolUseID = v
 			}
 		}
-		token := feedback.GenerateToken(c.hmacSecret, traceID, toolUseID, resp.Decision)
-		resp.FeedbackToken = &token
-		if c.feedbackHandler != nil {
-			sessionID, agent := "", ""
-			if req.Context != nil {
-				if v, ok := req.Context["session_id"].(string); ok {
-					sessionID = v
+		if toolUseID != "" {
+			token := feedback.GenerateToken(c.hmacSecret, traceID, toolUseID, resp.Decision)
+			resp.FeedbackToken = &token
+			if c.feedbackHandler != nil {
+				sessionID, agent := "", ""
+				if req.Context != nil {
+					if v, ok := req.Context["session_id"].(string); ok {
+						sessionID = v
+					}
+					if v, ok := req.Context["agent"].(string); ok {
+						agent = v
+					}
 				}
-				if v, ok := req.Context["agent"].(string); ok {
-					agent = v
-				}
+				c.feedbackHandler.RecordTrace(feedback.TraceInfo{
+					Decision:      resp.Decision,
+					ToolUseID:     toolUseID,
+					TraceID:       traceID,
+					Signature:     signature,
+					SignatureHash: sigHash,
+					CommandNames:  cmdNames,
+					Flags:         cmdFlags,
+					RawCommand:    c.scrubber.Command(req.Command),
+					CWD:           req.CWD,
+					SessionID:     sessionID,
+					Agent:         agent,
+				})
 			}
-			c.feedbackHandler.RecordTrace(feedback.TraceInfo{
-				Decision:      resp.Decision,
-				ToolUseID:     toolUseID,
-				TraceID:       traceID,
-				Signature:     signature,
-				SignatureHash: sigHash,
-				CommandNames:  cmdNames,
-				Flags:         cmdFlags,
-				RawCommand:    c.scrubber.Command(req.Command),
-				CWD:           req.CWD,
-				SessionID:     sessionID,
-				Agent:         agent,
-			})
 		}
 	}
 
@@ -771,8 +782,13 @@ func (c *Classifier) FeedbackHandler() *feedback.Handler {
 	return c.feedbackHandler
 }
 
-// Close releases resources held by the classifier (corpus DB, etc.).
+// Close releases resources held by the classifier (corpus DB, background goroutines).
+// It cancels the classifier-lifecycle context (stopping CommandCache and feedback
+// Handler goroutines) and then closes the corpus database.
 func (c *Classifier) Close() error {
+	if c.cancel != nil {
+		c.cancel()
+	}
 	if c.corpus != nil {
 		return c.corpus.Close()
 	}

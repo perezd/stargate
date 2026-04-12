@@ -15,8 +15,8 @@ const (
 // Options configures a TTLMap.
 type Options struct {
 	// SweepInterval controls how often the background goroutine removes expired
-	// entries. Defaults to max(defaultTTL/10, 30s) — callers should set this
-	// explicitly when they have a known TTL budget.
+	// entries. Defaults to 30s if zero — callers should set this explicitly
+	// when they have a known TTL budget.
 	SweepInterval time.Duration
 
 	// MaxEntries limits the number of live entries. When a Set would exceed

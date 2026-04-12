@@ -11,7 +11,7 @@ import (
 
 // CachedDecision stores the final outcome for a classified command.
 type CachedDecision struct {
-	Decision string // rule tier: "yellow"
+	Decision string // final LLM verdict: "allow", "deny", or empty on error
 	Action   string // final outcome: "allow", "block", "review"
 }
 

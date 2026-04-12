@@ -97,6 +97,13 @@ func (h *Handler) HandleFeedback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Verify tool_use_id matches the recorded trace. Reject with 403 and a
+	// generic message — don't reveal which field caused the mismatch.
+	if req.ToolUseID != info.ToolUseID {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "invalid feedback token"})
+		return
+	}
+
 	// Verify HMAC token.
 	if !VerifyToken(h.secret, req.FeedbackToken, info.TraceID, info.ToolUseID, info.Decision) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "invalid feedback token"})
