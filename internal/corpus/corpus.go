@@ -76,11 +76,12 @@ func Open(ctx context.Context, cfg config.CorpusConfig) (*Corpus, error) {
 		return nil, fmt.Errorf("corpus: create schema: %w", err)
 	}
 
-	// Check file permissions — warn if looser than 0600.
-	checkPermissions(dbPath)
-
-	// Set file permissions to 0600 (best-effort — file may have been created by SQLite).
+	// Tighten file permissions to 0600 before checking — SQLite may have
+	// created the file with umask-derived permissions (e.g. 0644).
 	os.Chmod(dbPath, 0600) //nolint:errcheck
+
+	// Warn if permissions are still looser than 0600 (e.g. chmod failed).
+	checkPermissions(dbPath)
 
 	ctx, cancel := context.WithCancel(ctx)
 	c := &Corpus{

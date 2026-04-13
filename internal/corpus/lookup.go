@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -119,7 +120,8 @@ type scoredEntry struct {
 }
 
 // scoredFilter computes Jaccard similarity for each candidate, filters by
-// MinSimilarity, and caps the result at maxCount.
+// MinSimilarity, sorts by similarity descending (created_at descending as
+// tiebreak), and caps the result at maxCount.
 func scoredFilter(candidates []scoredEntry, querySigSet map[string]struct{}, minSim float64, maxCount int) []scoredEntry {
 	scored := make([]scoredEntry, 0, len(candidates))
 	for _, c := range candidates {
@@ -130,6 +132,14 @@ func scoredFilter(candidates []scoredEntry, querySigSet map[string]struct{}, min
 			scored = append(scored, c)
 		}
 	}
+	// Sort by similarity descending so the cap retains the highest-quality
+	// matches rather than the most-recently inserted ones.
+	sort.Slice(scored, func(i, j int) bool {
+		if scored[i].Similarity != scored[j].Similarity {
+			return scored[i].Similarity > scored[j].Similarity
+		}
+		return scored[i].CreatedAt.After(scored[j].CreatedAt)
+	})
 	if maxCount > 0 && len(scored) > maxCount {
 		scored = scored[:maxCount]
 	}
