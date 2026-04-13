@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -429,8 +430,8 @@ func handleCorpusInspect(args []string, configPath string, _ bool) int {
 		return 1
 	}
 
-	var id int64
-	if _, err := fmt.Sscanf(args[0], "%d", &id); err != nil {
+	id, err := strconv.ParseInt(args[0], 10, 64)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "corpus inspect: invalid id %q: %v\n", args[0], err)
 		return 1
 	}
@@ -497,8 +498,8 @@ func handleCorpusInvalidate(args []string, configPath string, _ bool) int {
 		return 1
 	}
 
-	var id int64
-	if _, err := fmt.Sscanf(args[0], "%d", &id); err != nil {
+	id, err := strconv.ParseInt(args[0], 10, 64)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "corpus invalidate: invalid id %q: %v\n", args[0], err)
 		return 1
 	}

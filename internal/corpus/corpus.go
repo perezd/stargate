@@ -25,6 +25,7 @@ type Corpus struct {
 	wg              sync.WaitGroup
 	sigRateLimit    *ttlmap.TTLMap[string, struct{}]
 	globalRateLimit *ttlmap.TTLMap[string, int]
+	rateMu          sync.Mutex // guards rate-limit check+set in Write
 }
 
 // Open creates or opens the corpus database at the configured path.

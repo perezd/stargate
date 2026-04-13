@@ -82,6 +82,7 @@ type ClassifyResponse struct {
 type LLMReviewResult struct {
 	Performed      bool     `json:"performed"`
 	Decision       string   `json:"decision"`
+	Action         string   `json:"action,omitempty"` // populated on cache hit; empty for live LLM calls
 	Reasoning      string   `json:"reasoning"`
 	RiskFactors    []string `json:"risk_factors"`
 	FilesRequested []string `json:"files_requested"`
@@ -353,17 +354,23 @@ func (c *Classifier) Classify(ctx context.Context, req ClassifyRequest) *Classif
 		resp.LLMReview = llmResult
 		resp.Timing.LLMMs = llmResult.DurationMs
 
-		// Map LLM decision to action.
-		switch llmResult.Decision {
-		case "allow":
-			resp.Action = "allow"
-			resp.Reason = llmReasonString("LLM review approved", llmResult.Reasoning)
-		case "deny":
-			resp.Action = "block"
-			resp.Reason = llmReasonString("LLM review denied", llmResult.Reasoning)
-		default:
-			// Invalid/empty decision → ask user (fail-closed).
-			resp.Action = "review"
+		if !llmResult.Performed {
+			// Cache hit: action is already computed from the cached entry.
+			resp.Action = llmResult.Action
+			resp.Reason = "cached classification (no LLM call)"
+		} else {
+			// Map live LLM decision to action.
+			switch llmResult.Decision {
+			case "allow":
+				resp.Action = "allow"
+				resp.Reason = llmReasonString("LLM review approved", llmResult.Reasoning)
+			case "deny":
+				resp.Action = "block"
+				resp.Reason = llmReasonString("LLM review denied", llmResult.Reasoning)
+			default:
+				// Invalid/empty decision → ask user (fail-closed).
+				resp.Action = "review"
+			}
 		}
 	}
 
@@ -430,6 +437,7 @@ func (c *Classifier) reviewWithLLM(ctx context.Context, req ClassifyRequest, cmd
 		result.Performed = false
 		result.Rounds = 0
 		result.Decision = cached.Decision
+		result.Action = cached.Action
 		result.Reasoning = "command cache hit (no LLM call)"
 		return result
 	}
