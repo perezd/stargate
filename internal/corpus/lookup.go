@@ -20,11 +20,19 @@ type LookupConfig struct {
 // Jaccard similarity against the provided signature, and returns balanced
 // results across positive (allow/user_approved) and negative (deny) polarities.
 func (c *Corpus) LookupSimilar(cmdNames []string, signature string, cfg LookupConfig) ([]PrecedentEntry, error) {
-	cutoff := time.Now().UTC().Add(-cfg.MaxAge).Format(time.RFC3339)
-
 	// Build the IN clause placeholders for command name matching.
 	if len(cmdNames) == 0 {
 		return nil, nil
+	}
+
+	// When MaxAge <= 0, skip the age filter entirely by using the Unix epoch as
+	// the cutoff — this matches all entries rather than excluding everything
+	// (time.Now().Add(-0) would equal time.Now(), excluding all rows).
+	var cutoff string
+	if cfg.MaxAge > 0 {
+		cutoff = time.Now().UTC().Add(-cfg.MaxAge).Format(time.RFC3339)
+	} else {
+		cutoff = "1970-01-01T00:00:00Z"
 	}
 
 	args := make([]interface{}, len(cmdNames)+1)

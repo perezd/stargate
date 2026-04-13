@@ -148,6 +148,10 @@ func (c *Corpus) ExportAll() ([]PrecedentEntry, error) {
 
 // ImportEntry inserts a single PrecedentEntry, bypassing rate limiting.
 // This is intended for admin import operations only.
+//
+// Note: import is not a lossless round-trip. CreatedAt, LastHitAt, and HitCount
+// are not preserved — the database sets created_at to the current time and
+// hit_count defaults to 0. Imported entries are intentionally treated as fresh.
 func (c *Corpus) ImportEntry(entry PrecedentEntry) error {
 	commandNamesJSON, err := marshalStringSlice(entry.CommandNames)
 	if err != nil {

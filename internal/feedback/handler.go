@@ -92,7 +92,7 @@ func (h *Handler) HandleFeedback(w http.ResponseWriter, r *http.Request) {
 	// Lookup trace in TTL map.
 	info, found := h.traceMap.Get(req.StargateTrID)
 	if !found {
-		fmt.Fprintf(os.Stderr, "feedback: WARN trace %s expired or not found\n", req.StargateTrID)
+		fmt.Fprintf(os.Stderr, "feedback: WARN trace %q expired or not found\n", req.StargateTrID)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "trace_expired"})
 		return
 	}
