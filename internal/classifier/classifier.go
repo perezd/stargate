@@ -385,6 +385,13 @@ func (c *Classifier) Classify(ctx context.Context, req ClassifyRequest) *Classif
 				toolUseID = v
 			}
 		}
+		// Compute structural fields if not already done (LLM path skipped when
+		// provider is nil, but feedback still needs them for user_approved entries).
+		if signature == "" {
+			signature, sigHash = corpus.ComputeSignature(cmds)
+			cmdNames = corpus.CommandNames(cmds)
+			cmdFlags = collectFlags(cmds)
+		}
 		if toolUseID != "" {
 			token := feedback.GenerateToken(c.hmacSecret, traceID, toolUseID, resp.Decision)
 			resp.FeedbackToken = &token
