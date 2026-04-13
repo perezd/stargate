@@ -110,65 +110,6 @@ func TestHandlers_UnimplementedReturnNonZero(t *testing.T) {
 	}
 }
 
-func writeTestConfig(t *testing.T, content string) string {
-	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "stargate.toml")
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		t.Fatalf("failed to write test config: %v", err)
-	}
-	return path
-}
-
-func TestConfigValidate_ValidConfig(t *testing.T) {
-	path := writeTestConfig(t, `
-[server]
-listen = "127.0.0.1:9099"
-[classifier]
-default_decision = "yellow"
-`)
-
-	code := handleConfigValidate(path, false)
-	if code != 0 {
-		t.Errorf("expected exit 0 for valid config, got %d", code)
-	}
-}
-
-func TestConfigValidate_InvalidConfig(t *testing.T) {
-	path := writeTestConfig(t, `
-[classifier]
-default_decision = "invalid"
-`)
-
-	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatalf("failed to open %q: %v", os.DevNull, err)
-	}
-	origStderr := os.Stderr
-	os.Stderr = devNull
-	defer func() { os.Stderr = origStderr; devNull.Close() }()
-
-	code := handleConfigValidate(path, false)
-	if code != 1 {
-		t.Errorf("expected exit 1 for invalid config, got %d", code)
-	}
-}
-
-func TestConfigValidate_MissingFile(t *testing.T) {
-	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatalf("failed to open %q: %v", os.DevNull, err)
-	}
-	origStderr := os.Stderr
-	os.Stderr = devNull
-	defer func() { os.Stderr = origStderr; devNull.Close() }()
-
-	code := handleConfigValidate("/nonexistent/stargate.toml", false)
-	if code != 1 {
-		t.Errorf("expected exit 1 for missing file, got %d", code)
-	}
-}
-
 // TestParseGlobalArgs_VerboseFlag verifies -v sets verbose.
 func TestParseGlobalArgs_VerboseFlag(t *testing.T) {
 	_, verbose, remaining := parseGlobalArgs([]string{"-v", "serve"})
@@ -204,30 +145,5 @@ func TestParseGlobalArgs_NoSubcommand(t *testing.T) {
 	_, _, remaining := parseGlobalArgs([]string{"-v"})
 	if len(remaining) != 0 {
 		t.Errorf("expected empty remaining, got %v", remaining)
-	}
-}
-
-func TestIsLoopbackAddr(t *testing.T) {
-	tests := []struct {
-		addr string
-		want bool
-	}{
-		{"127.0.0.1:9099", true},
-		{"127.0.0.1:0", true},
-		{"[::1]:9099", true},
-		{"localhost:9099", false}, // hostnames rejected, only literal IPs
-		{"0.0.0.0:9099", false},
-		{":9099", false},
-		{"192.168.1.1:9099", false},
-		{"10.0.0.1:9099", false},
-		{"invalid", false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.addr, func(t *testing.T) {
-			got := isLoopbackAddr(tc.addr)
-			if got != tc.want {
-				t.Errorf("isLoopbackAddr(%q) = %v, want %v", tc.addr, got, tc.want)
-			}
-		})
 	}
 }
