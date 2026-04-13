@@ -32,7 +32,7 @@ func ParseMaxAge(s string) (time.Duration, error) {
 			return time.Duration(days) * 24 * time.Hour, nil
 		}
 	}
-	return 0, fmt.Errorf("config: invalid max_age %q (use Go durations like \"1h\" or day-based like \"90d\")", s)
+	return 0, fmt.Errorf("invalid max_age %q (use Go durations like \"1h\" or day-based like \"90d\")", s)
 }
 
 // parseDuration validates that a string is a valid, non-negative Go duration.

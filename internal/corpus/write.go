@@ -59,17 +59,11 @@ func (c *Corpus) Write(entry PrecedentEntry) error {
 	// global limits must be atomic so concurrent callers cannot both pass the
 	// check before either sets the limit entry.
 	c.rateMu.Lock()
-	// Per-signature rate limit: 1 write per signature_hash per hour.
-	// Set the entry BEFORE the DB insert so concurrent callers see it and fail
-	// closed rather than racing past this check. A failed insert "wastes" one
-	// rate-limit slot — acceptable because it blocks rather than allows.
-	if _, exists := c.sigRateLimit.Get(entry.SignatureHash); exists {
-		c.rateMu.Unlock()
-		return ErrRateLimited
-	}
-	c.sigRateLimit.Set(entry.SignatureHash, struct{}{}, time.Hour)
-
 	// Global rate limit: max_writes_per_minute from config.
+	// Check first so that a global-limit rejection does not consume a
+	// per-signature slot — if we set the per-signature entry before checking
+	// the global limit, a rejection here would block that signature for an
+	// hour even though no write occurred.
 	if c.cfg.MaxWritesPerMinute > 0 {
 		bucketKey := globalBucketKey()
 		count, _ := c.globalRateLimit.Get(bucketKey)
@@ -80,6 +74,16 @@ func (c *Corpus) Write(entry PrecedentEntry) error {
 		// Increment the counter (TTL = remainder of this minute + 1s buffer).
 		c.globalRateLimit.Set(bucketKey, count+1, 61*time.Second)
 	}
+
+	// Per-signature rate limit: 1 write per signature_hash per hour.
+	// Set the entry BEFORE the DB insert so concurrent callers see it and fail
+	// closed rather than racing past this check. A failed insert "wastes" one
+	// rate-limit slot — acceptable because it blocks rather than allows.
+	if _, exists := c.sigRateLimit.Get(entry.SignatureHash); exists {
+		c.rateMu.Unlock()
+		return ErrRateLimited
+	}
+	c.sigRateLimit.Set(entry.SignatureHash, struct{}{}, time.Hour)
 	c.rateMu.Unlock()
 
 	// JSON-encode []string fields.
