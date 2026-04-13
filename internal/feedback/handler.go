@@ -44,19 +44,24 @@ type FeedbackRequest struct {
 // Handler processes feedback submissions, verifying HMAC tokens and writing
 // user_approved entries to the corpus.
 type Handler struct {
-	corpus   *corpus.Corpus
-	secret   []byte
-	traceMap *ttlmap.TTLMap[string, TraceInfo]
+	corpus             *corpus.Corpus
+	secret             []byte
+	traceMap           *ttlmap.TTLMap[string, TraceInfo]
+	storeUserApprovals bool
 }
 
 // NewHandler creates a feedback handler. The corpus may be nil (feedback is
-// accepted but not persisted). The TTL map holds trace info for 5 minutes.
-func NewHandler(ctx context.Context, c *corpus.Corpus, secret []byte) *Handler {
+// accepted but not persisted). The TTL map holds trace info for 5 minutes
+// and is capped at 10 000 entries to bound memory under burst YELLOW traffic.
+// storeApprovals controls whether user_approved outcomes are written to corpus.
+func NewHandler(ctx context.Context, c *corpus.Corpus, secret []byte, storeApprovals bool) *Handler {
 	return &Handler{
 		corpus: c,
 		secret: secret,
+		storeUserApprovals: storeApprovals,
 		traceMap: ttlmap.New[string, TraceInfo](ctx, ttlmap.Options{
 			SweepInterval: 30 * time.Second,
+			MaxEntries:    10000,
 		}),
 	}
 }
@@ -118,10 +123,11 @@ func (h *Handler) HandleFeedback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Write user_approved to corpus for executed YELLOW decisions.
-	// The entry carries structural fields from the original classification
-	// so it's discoverable by future precedent lookups.
-	if req.Outcome == "executed" && info.Decision == "yellow" && h.corpus != nil {
+	// Write user_approved to corpus for executed YELLOW decisions when
+	// store_user_approvals is enabled. The entry carries structural fields
+	// from the original classification so it's discoverable by future
+	// precedent lookups.
+	if req.Outcome == "executed" && info.Decision == "yellow" && h.corpus != nil && h.storeUserApprovals {
 		entry := corpus.PrecedentEntry{
 			Signature:     info.Signature,
 			SignatureHash: info.SignatureHash,

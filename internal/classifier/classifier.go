@@ -216,7 +216,7 @@ func New(cfg *config.Config) (*Classifier, error) {
 	}
 
 	// Create feedback handler.
-	feedbackHandler := feedback.NewHandler(lifecycleCtx, c, hmacSecret)
+	feedbackHandler := feedback.NewHandler(lifecycleCtx, c, hmacSecret, cfg.Corpus.StoreUserApprovals)
 
 	return &Classifier{
 		engine:          eng,
@@ -427,8 +427,10 @@ func (c *Classifier) reviewWithLLM(ctx context.Context, req ClassifyRequest, cmd
 
 	// Command cache check — skip everything on HIT.
 	if cached, hit := c.cmdCache.Lookup(req.Command, req.CWD); hit {
+		result.Performed = false
+		result.Rounds = 0
 		result.Decision = cached.Decision
-		result.Reasoning = "command cache hit"
+		result.Reasoning = "command cache hit (no LLM call)"
 		return result
 	}
 

@@ -131,10 +131,18 @@ func (m *TTLMap[K, V]) Get(key K) (V, bool) {
 
 	if time.Now().After(e.expiresAt) {
 		// Lazy expiry: upgrade to write lock and delete, re-checking expiry in
-		// case the background sweep already removed it between the RUnlock and Lock.
+		// case the background sweep already removed it or a concurrent Set
+		// refreshed it between the RUnlock and Lock.
 		m.mu.Lock()
-		if e2, still := m.items[key]; still && time.Now().After(e2.expiresAt) {
-			delete(m.items, key)
+		if e2, still := m.items[key]; still {
+			if time.Now().After(e2.expiresAt) {
+				delete(m.items, key)
+			} else {
+				// A concurrent Set refreshed this entry — return the new value.
+				v := e2.value
+				m.mu.Unlock()
+				return v, true
+			}
 		}
 		m.mu.Unlock()
 		var zero V

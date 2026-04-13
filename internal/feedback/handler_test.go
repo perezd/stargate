@@ -13,7 +13,7 @@ func TestHandleFeedbackValidHMAC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := NewHandler(t.Context(), nil, secret)
+	h := NewHandler(t.Context(), nil, secret, true)
 
 	traceID := "sg_tr_abc123"
 	toolUseID := "tu_001"
@@ -45,7 +45,7 @@ func TestHandleFeedbackValidHMAC(t *testing.T) {
 
 func TestHandleFeedbackInvalidHMAC(t *testing.T) {
 	secret, _ := GenerateSecret()
-	h := NewHandler(t.Context(), nil, secret)
+	h := NewHandler(t.Context(), nil, secret, true)
 
 	traceID := "sg_tr_abc123"
 	toolUseID := "tu_001"
@@ -75,7 +75,7 @@ func TestHandleFeedbackInvalidHMAC(t *testing.T) {
 
 func TestHandleFeedbackExpiredTrace(t *testing.T) {
 	secret, _ := GenerateSecret()
-	h := NewHandler(t.Context(), nil, secret)
+	h := NewHandler(t.Context(), nil, secret, true)
 
 	// Don't record a trace — it should be "expired/not found".
 	body := FeedbackRequest{
@@ -102,7 +102,7 @@ func TestHandleFeedbackExpiredTrace(t *testing.T) {
 
 func TestHandleFeedbackMissingFields(t *testing.T) {
 	secret, _ := GenerateSecret()
-	h := NewHandler(t.Context(), nil, secret)
+	h := NewHandler(t.Context(), nil, secret, true)
 
 	tests := []struct {
 		name string
@@ -130,7 +130,7 @@ func TestHandleFeedbackMissingFields(t *testing.T) {
 
 func TestHandleFeedbackIdempotent(t *testing.T) {
 	secret, _ := GenerateSecret()
-	h := NewHandler(t.Context(), nil, secret)
+	h := NewHandler(t.Context(), nil, secret, true)
 
 	traceID := "sg_tr_idempotent"
 	toolUseID := "tu_001"

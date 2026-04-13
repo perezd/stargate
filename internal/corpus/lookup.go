@@ -100,10 +100,7 @@ func (c *Corpus) LookupSimilar(cmdNames []string, signature string, cfg LookupCo
 		for i := range results {
 			ids[i] = results[i].id
 		}
-		if err := c.updateHitStats(ids); err != nil {
-			// Non-fatal: best effort update.
-			_ = err
-		}
+		c.updateHitStats(ids) //nolint:errcheck // best-effort, errors ignored
 	}
 
 	// Copy results to PrecedentEntry, populating ID from the internal DB id.
