@@ -8,8 +8,10 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"slices"
 	"strings"
@@ -842,9 +844,18 @@ func contextLabel(ctx rules.CommandContext) string {
 }
 
 
-// FeedbackHandler returns the feedback handler for use by the HTTP server.
-func (c *Classifier) FeedbackHandler() *feedback.Handler {
-	return c.feedbackHandler
+// HandleFeedback is the HTTP handler for POST /feedback. If feedback is
+// not configured (no corpus, no HMAC secret), it returns 501 Not Implemented.
+// The server registers this directly — it never needs to know about the
+// feedback package or the classifier's internal structure.
+func (c *Classifier) HandleFeedback(w http.ResponseWriter, r *http.Request) {
+	if c.feedbackHandler != nil {
+		c.feedbackHandler.HandleFeedback(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotImplemented)
+	json.NewEncoder(w).Encode(map[string]string{"error": "not implemented"}) //nolint:errcheck
 }
 
 // Close releases resources held by the classifier (corpus DB, background goroutines).

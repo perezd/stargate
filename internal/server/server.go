@@ -58,11 +58,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /health", s.handleHealth)
 	s.mux.HandleFunc("POST /classify", s.handleClassify)
-	if fh := s.clf.FeedbackHandler(); fh != nil {
-		s.mux.HandleFunc("POST /feedback", fh.HandleFeedback)
-	} else {
-		s.mux.HandleFunc("POST /feedback", stubHandler)
-	}
+	s.mux.HandleFunc("POST /feedback", s.clf.HandleFeedback)
 	s.mux.HandleFunc("POST /reload", stubHandler)
 	s.mux.HandleFunc("POST /test", stubHandler)
 }
