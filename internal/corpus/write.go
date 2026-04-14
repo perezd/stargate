@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/limbic-systems/stargate/internal/ttlmap"
@@ -14,6 +15,7 @@ import (
 // ErrRateLimited is returned by Write when either the per-signature or the
 // global write rate limit is exceeded.
 var ErrRateLimited = errors.New("corpus: write rate limited")
+var ErrDuplicate = errors.New("corpus: duplicate entry (UNIQUE constraint)")
 
 // PrecedentEntry represents a corpus entry for writing or reading.
 type PrecedentEntry struct {
@@ -141,6 +143,9 @@ func (c *Corpus) Write(entry PrecedentEntry) error {
 		toNullString(entry.Agent),
 	)
 	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint") {
+			return ErrDuplicate
+		}
 		return fmt.Errorf("corpus: insert precedent: %w", err)
 	}
 

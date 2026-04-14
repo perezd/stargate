@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/limbic-systems/stargate/internal/corpus"
@@ -152,9 +151,8 @@ func (h *Handler) HandleFeedback(w http.ResponseWriter, r *http.Request) {
 			Agent:         info.Agent,
 		}
 		if err := h.corpus.Write(entry); err != nil {
-			// UNIQUE constraint violation = already recorded (idempotent).
-			// Rate limiting = expected under burst. Both are non-fatal.
-			if !strings.Contains(err.Error(), "UNIQUE constraint") && !errors.Is(err, corpus.ErrRateLimited) {
+			// Duplicate (idempotent retry) and rate limiting are expected — suppress.
+			if !errors.Is(err, corpus.ErrDuplicate) && !errors.Is(err, corpus.ErrRateLimited) {
 				fmt.Fprintf(os.Stderr, "feedback: corpus write: %v\n", err)
 			}
 		}
