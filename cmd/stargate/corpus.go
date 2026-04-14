@@ -147,23 +147,11 @@ func handleCorpusSearch(args []string, configPath string, _ bool) int {
 		maxAge = parsed
 	}
 
-	minSim := cfg.Corpus.MinSimilarity
-	if minSim <= 0 {
-		minSim = 0.0
-	}
-	maxPrecedents := cfg.Corpus.MaxPrecedents
-	if maxPrecedents <= 0 {
-		maxPrecedents = 10
-	}
-	maxPerPolarity := cfg.Corpus.MaxPrecedentsPerPolarity
-	if maxPerPolarity <= 0 {
-		maxPerPolarity = 5
-	}
 
 	lookupCfg := corpus.LookupConfig{
-		MinSimilarity:  minSim,
-		MaxPrecedents:  maxPrecedents,
-		MaxPerPolarity: maxPerPolarity,
+		MinSimilarity:  cfg.Corpus.MinSimilarity,
+		MaxPrecedents:  cfg.Corpus.MaxPrecedents,
+		MaxPerPolarity: cfg.Corpus.MaxPrecedentsPerPolarity,
 		MaxAge:         maxAge,
 	}
 
