@@ -39,6 +39,7 @@ type Classifier struct {
 	scrubber        *scrub.Scrubber
 	llmCfg          config.LLMConfig
 	corpusCfg       config.CorpusConfig
+	corpusMaxAge    time.Duration       // parsed once from corpusCfg.MaxAge
 	scopes          map[string][]string // for prompt injection
 	serverCWD       string              // for file retrieval path anchoring
 	maxReasonLen    int                 // max reasoning chars in API response
@@ -218,6 +219,12 @@ func New(cfg *config.Config) (*Classifier, error) {
 		return nil, fmt.Errorf("classifier: generate HMAC secret: %w", err)
 	}
 
+	// Parse corpus max age once (used on every LLM review, avoid per-request parsing).
+	corpusMaxAge := 90 * 24 * time.Hour // default
+	if parsed, err := config.ParseMaxAge(cfg.Corpus.MaxAge); err == nil && parsed > 0 {
+		corpusMaxAge = parsed
+	}
+
 	// Create feedback handler.
 	feedbackHandler := feedback.NewHandler(lifecycleCtx, c, hmacSecret, cfg.Corpus.IsStoreUserApprovals())
 
@@ -233,6 +240,7 @@ func New(cfg *config.Config) (*Classifier, error) {
 		scrubber:        scrubber,
 		llmCfg:          cfg.LLM,
 		corpusCfg:       cfg.Corpus,
+		corpusMaxAge:    corpusMaxAge,
 		scopes:          cfg.Scopes,
 		serverCWD:       serverCWD,
 		maxReasonLen:    cfg.LLM.MaxResponseReasoningLength,
@@ -580,15 +588,11 @@ func (c *Classifier) reviewWithLLM(state *classifyState) *LLMReviewResult {
 	var precedentText string
 	var precedentsFound int
 	if c.corpus != nil {
-		maxAge := 24 * time.Hour * 90 // default 90 days
-		if parsed, err := config.ParseMaxAge(c.corpusCfg.MaxAge); err == nil && parsed > 0 {
-			maxAge = parsed
-		}
 		lookupCfg := corpus.LookupConfig{
 			MinSimilarity:  c.corpusCfg.MinSimilarity,
 			MaxPrecedents:  c.corpusCfg.MaxPrecedents,
 			MaxPerPolarity: c.corpusCfg.MaxPrecedentsPerPolarity,
-			MaxAge:         maxAge,
+			MaxAge:         c.corpusMaxAge,
 		}
 		precedents, err := c.corpus.LookupSimilar(state.cmdNames, state.signature, lookupCfg)
 		if err != nil {

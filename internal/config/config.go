@@ -14,6 +14,10 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// dayDurationRe matches strict "Nd" day format (e.g., "90d", "7d").
+// Precompiled to avoid per-call regex compilation in ParseMaxAge.
+var dayDurationRe = regexp.MustCompile(`^[1-9]\d*d$`)
+
 // ParseMaxAge parses a duration string that may use "Nd" day format.
 // Returns 0 for empty strings.
 func ParseMaxAge(s string) (time.Duration, error) {
@@ -28,8 +32,7 @@ func ParseMaxAge(s string) (time.Duration, error) {
 		return d, nil
 	}
 	// Try strict "Nd" format for days (e.g., "90d", "7d").
-	// Use regexp to reject trailing garbage like "90dxyz".
-	if matched, _ := regexp.MatchString(`^[1-9]\d*d$`, s); matched {
+	if dayDurationRe.MatchString(s) {
 		days, err := strconv.Atoi(strings.TrimSuffix(s, "d"))
 		if err == nil && days > 0 {
 			return time.Duration(days) * 24 * time.Hour, nil

@@ -22,7 +22,7 @@ type Options struct {
 	SweepInterval time.Duration
 
 	// MaxEntries limits the number of live entries. When a Set would exceed
-	// this limit, the entry with the oldest insertedAt is evicted first.
+	// this limit, the entry with the oldest writtenAt is evicted first.
 	// Zero means unlimited.
 	MaxEntries int
 }
@@ -31,7 +31,7 @@ type Options struct {
 type entry[V any] struct {
 	value      V
 	expiresAt  time.Time
-	insertedAt time.Time
+	writtenAt time.Time
 }
 
 // TTLMap is a generic, thread-safe map whose entries expire after a
@@ -63,14 +63,14 @@ func New[K comparable, V any](ctx context.Context, opts Options) *TTLMap[K, V] {
 }
 
 // Set inserts or updates key with the given value and TTL. If MaxEntries is
-// set and the map is at capacity, the entry with the oldest insertedAt is
+// set and the map is at capacity, the entry with the oldest writtenAt is
 // evicted before the new entry is stored.
 func (m *TTLMap[K, V]) Set(key K, value V, ttl time.Duration) {
 	now := time.Now()
 	e := entry[V]{
 		value:      value,
 		expiresAt:  now.Add(ttl),
-		insertedAt: now,
+		writtenAt: now,
 	}
 
 	m.mu.Lock()
@@ -97,7 +97,7 @@ func (m *TTLMap[K, V]) Set(key K, value V, ttl time.Duration) {
 	m.items[key] = e
 }
 
-// evictOldest removes the entry whose insertedAt is earliest. Must be called
+// evictOldest removes the entry whose writtenAt is earliest. Must be called
 // with m.mu held for write.
 func (m *TTLMap[K, V]) evictOldest() {
 	var (
@@ -107,9 +107,9 @@ func (m *TTLMap[K, V]) evictOldest() {
 	)
 
 	for k, e := range m.items {
-		if first || e.insertedAt.Before(oldestAt) {
+		if first || e.writtenAt.Before(oldestAt) {
 			oldestKey = k
-			oldestAt = e.insertedAt
+			oldestAt = e.writtenAt
 			first = false
 		}
 	}
