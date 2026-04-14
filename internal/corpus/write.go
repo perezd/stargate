@@ -84,8 +84,11 @@ func (c *Corpus) Write(entry PrecedentEntry) error {
 		}
 	}
 
-	// Per-signature rate limit: 1 write per signature_hash per hour.
-	if _, exists := c.sigRateLimit.Get(entry.SignatureHash); exists {
+	// Per-signature rate limit: 1 write per signature_hash+decision per hour.
+	// Keyed on hash+decision so that an LLM "allow" write doesn't block a
+	// subsequent "user_approved" write for the same structural signature.
+	sigKey := entry.SignatureHash + ":" + entry.Decision
+	if _, exists := c.sigRateLimit.Get(sigKey); exists {
 		c.rateMu.Unlock()
 		return ErrRateLimited
 	}
@@ -94,7 +97,7 @@ func (c *Corpus) Write(entry PrecedentEntry) error {
 	if c.cfg.MaxWritesPerMinute > 0 {
 		c.globalRateLimit.Set(globalBucket, globalCount+1, 61*time.Second)
 	}
-	c.sigRateLimit.Set(entry.SignatureHash, struct{}{}, time.Hour)
+	c.sigRateLimit.Set(sigKey, struct{}{}, time.Hour)
 	c.rateMu.Unlock()
 
 	// JSON-encode []string fields.

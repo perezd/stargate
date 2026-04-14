@@ -327,7 +327,8 @@ func TestWriteAfterRateLimitExpires(t *testing.T) {
 	}
 
 	// Overwrite the rate limit entry with a 50ms TTL so it expires.
-	c.sigRateLimit.Set(hash, struct{}{}, 50*time.Millisecond)
+	// Key format is signature_hash:decision (matches write.go).
+	c.sigRateLimit.Set(hash+":"+e.Decision, struct{}{}, 50*time.Millisecond)
 
 	time.Sleep(100 * time.Millisecond) // wait for expiry
 
