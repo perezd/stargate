@@ -76,11 +76,14 @@ func (m *TTLMap[K, V]) Set(key K, value V, ttl time.Duration) {
 
 	// If key already exists, update in place — no eviction needed.
 	if _, exists := m.items[key]; !exists && m.opts.MaxEntries > 0 {
-		// Purge expired entries first so they don't inflate the live count and
-		// cause unnecessary eviction of valid entries.
-		for k, e := range m.items {
-			if now.After(e.expiresAt) {
-				delete(m.items, k)
+		// Only sweep expired entries when at or above capacity. Below capacity
+		// the background goroutine handles routine expiry; sweeping on every
+		// insert would be O(n) even when there is plenty of room.
+		if len(m.items) >= m.opts.MaxEntries {
+			for k, e := range m.items {
+				if now.After(e.expiresAt) {
+					delete(m.items, k)
+				}
 			}
 		}
 		// Evict oldest live entries until we have room.

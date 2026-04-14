@@ -22,6 +22,9 @@ func ParseMaxAge(s string) (time.Duration, error) {
 	}
 	// Try standard Go duration first.
 	if d, err := time.ParseDuration(s); err == nil {
+		if d < 0 {
+			return 0, fmt.Errorf("invalid max_age %q: must be non-negative", s)
+		}
 		return d, nil
 	}
 	// Try strict "Nd" format for days (e.g., "90d", "7d").
@@ -348,9 +351,13 @@ func applyDefaults(cfg *Config) {
 	if cfg.Corpus.Path == "" {
 		cfg.Corpus.Path = "~/.local/share/stargate/precedents.db"
 	}
+	// MaxPrecedents: 0 means "use default" (5). To disable precedent injection,
+	// set corpus.enabled = false instead of max_precedents = 0.
 	if cfg.Corpus.MaxPrecedents == 0 {
 		cfg.Corpus.MaxPrecedents = 5
 	}
+	// MinSimilarity: 0 means "use default" (0.7). To disable similarity
+	// filtering, set corpus.enabled = false instead of min_similarity = 0.
 	if cfg.Corpus.MinSimilarity == 0 {
 		cfg.Corpus.MinSimilarity = 0.7
 	}
