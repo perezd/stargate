@@ -200,8 +200,8 @@ type ScrubbingConfig struct {
 type CorpusConfig struct {
 	Enabled                *bool   `toml:"enabled"`
 	Path                   string  `toml:"path"`
-	MaxPrecedents          int     `toml:"max_precedents"`
-	MinSimilarity          float64 `toml:"min_similarity"`
+	MaxPrecedents          int     `toml:"max_precedents"`  // 0 = use default (5). Not a pointer: 0 is not a useful explicit value (use Enabled=false to disable).
+	MinSimilarity          float64 `toml:"min_similarity"` // 0 = use default (0.7). Not a pointer: 0.0 matches everything, use Enabled=false to disable.
 	MaxAge                 string  `toml:"max_age"`
 	MaxEntries             *int    `toml:"max_entries"`
 	PruneInterval          string  `toml:"prune_interval"`
