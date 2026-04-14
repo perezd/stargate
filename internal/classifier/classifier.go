@@ -844,8 +844,10 @@ func contextLabel(ctx rules.CommandContext) string {
 }
 
 
-// HandleFeedback is the HTTP handler for POST /feedback. If feedback is
-// not configured (no corpus, no HMAC secret), it returns 501 Not Implemented.
+// HandleFeedback is the HTTP handler for POST /feedback. If the feedback
+// handler was not initialized (e.g., classifier created without HMAC secret),
+// it returns 501 Not Implemented. When the corpus is nil but the handler exists,
+// feedback is accepted but not persisted (best-effort).
 // The server registers this directly — it never needs to know about the
 // feedback package or the classifier's internal structure.
 func (c *Classifier) HandleFeedback(w http.ResponseWriter, r *http.Request) {
