@@ -470,6 +470,8 @@ func (c *Classifier) reviewWithLLM(state *classifyState) *LLMReviewResult {
 	}()
 
 	// Command cache check — skip everything on HIT.
+	// This must return before postProcess is defined so cache hits never
+	// write to corpus or command cache.
 	if cached, hit := c.cmdCache.Lookup(state.req.Command, state.req.CWD); hit {
 		result.Performed = false
 		result.Rounds = 0
@@ -479,74 +481,14 @@ func (c *Classifier) reviewWithLLM(state *classifyState) *LLMReviewResult {
 		return result
 	}
 
-	// Corpus precedent lookup.
-	state.ensureSignature()
-	var precedentText string
-	var precedentsFound int
-	if c.corpus != nil {
-		maxAge := 24 * time.Hour * 90 // default 90 days
-		if parsed, err := config.ParseMaxAge(c.corpusCfg.MaxAge); err == nil && parsed > 0 {
-			maxAge = parsed
-		}
-		lookupCfg := corpus.LookupConfig{
-			MinSimilarity:  c.corpusCfg.MinSimilarity,
-			MaxPrecedents:  c.corpusCfg.MaxPrecedents,
-			MaxPerPolarity: c.corpusCfg.MaxPrecedentsPerPolarity,
-			MaxAge:         maxAge,
-		}
-		precedents, err := c.corpus.LookupSimilar(state.cmdNames, state.signature, lookupCfg)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "classifier: corpus lookup: %v\n", err)
-		} else {
-			precedentsFound = len(precedents)
-			// Format precedents for prompt.
-			var fmtPrecedents []corpus.FormatPrecedent
-			for _, p := range precedents {
-				fmtPrecedents = append(fmtPrecedents, corpus.FormatPrecedent{
-					Decision:   p.Decision,
-					Command:    cmp.Or(p.RawCommand, "[scrubbed]"),
-					Reasoning:  p.Reasoning,
-					CWD:        p.CWD,
-					CreatedAt:  p.CreatedAt,
-					Similarity: p.Similarity,
-					ExactMatch: p.SignatureHash == state.signatureHash,
-				})
-			}
-			precedentText = corpus.FormatPrecedents(fmtPrecedents)
-		}
-	}
-
-	// Scrub command and build AST summary.
-	scrubbedCmd := c.scrubber.Command(state.req.Command)
-	astSummary := c.buildASTTextSummary(state.cmds)
-
-	// Format scopes for prompt (sorted for deterministic ordering).
-	scopeNames := make([]string, 0, len(c.scopes))
-	for name := range c.scopes {
-		scopeNames = append(scopeNames, name)
-	}
-	slices.Sort(scopeNames)
-	var scopeLines []string
-	for _, name := range scopeNames {
-		scopeLines = append(scopeLines, name+": "+strings.Join(c.scopes[name], ", "))
-	}
-
-	vars := llm.PromptVars{
-		Command:    scrubbedCmd,
-		ASTSummary: astSummary,
-		CWD:        state.req.CWD,
-		RuleReason: state.resp.Reason,
-		Scopes:     strings.Join(scopeLines, "\n"),
-		Precedents: precedentText,
-	}
-
-	systemPrompt, userContent := llm.BuildPrompt(c.llmCfg.SystemPrompt, vars)
-
-	// Populate corpus summary in response.
-	corpusSummary := &CorpusSummary{PrecedentsFound: precedentsFound}
+	// Populate corpus summary in response — declared before postProcess so
+	// the closure can mark EntryWritten.
+	corpusSummary := &CorpusSummary{}
 	state.resp.Corpus = corpusSummary
 
 	// postProcess writes to corpus and command cache after LLM decision.
+	// It no-ops when result.Decision is empty (error paths), so deferred
+	// calls on error returns are safe.
 	postProcess := func() {
 		if result.Decision == "" {
 			return // no decision to store (LLM error)
@@ -565,6 +507,12 @@ func (c *Classifier) reviewWithLLM(state *classifyState) *LLMReviewResult {
 				shouldStore = true
 			}
 			if shouldStore {
+				// Compute scrubbed command and AST summary for corpus entry.
+				// These are cheap operations, computed here to avoid variable
+				// ordering dependencies with the defer.
+				scrubbedCmd := c.scrubber.Command(state.req.Command)
+				astSummary := c.buildASTTextSummary(state.cmds)
+
 				entry := corpus.PrecedentEntry{
 					Signature:     state.signature,
 					SignatureHash: state.signatureHash,
@@ -604,6 +552,71 @@ func (c *Classifier) reviewWithLLM(state *classifyState) *LLMReviewResult {
 		}
 		c.cmdCache.Store(state.req.Command, state.req.CWD, result.Decision, action)
 	}
+	defer postProcess()
+
+	// Corpus precedent lookup.
+	state.ensureSignature()
+	var precedentText string
+	var precedentsFound int
+	if c.corpus != nil {
+		maxAge := 24 * time.Hour * 90 // default 90 days
+		if parsed, err := config.ParseMaxAge(c.corpusCfg.MaxAge); err == nil && parsed > 0 {
+			maxAge = parsed
+		}
+		lookupCfg := corpus.LookupConfig{
+			MinSimilarity:  c.corpusCfg.MinSimilarity,
+			MaxPrecedents:  c.corpusCfg.MaxPrecedents,
+			MaxPerPolarity: c.corpusCfg.MaxPrecedentsPerPolarity,
+			MaxAge:         maxAge,
+		}
+		precedents, err := c.corpus.LookupSimilar(state.cmdNames, state.signature, lookupCfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "classifier: corpus lookup: %v\n", err)
+		} else {
+			precedentsFound = len(precedents)
+			// Format precedents for prompt.
+			var fmtPrecedents []corpus.FormatPrecedent
+			for _, p := range precedents {
+				fmtPrecedents = append(fmtPrecedents, corpus.FormatPrecedent{
+					Decision:   p.Decision,
+					Command:    cmp.Or(p.RawCommand, "[scrubbed]"),
+					Reasoning:  p.Reasoning,
+					CWD:        p.CWD,
+					CreatedAt:  p.CreatedAt,
+					Similarity: p.Similarity,
+					ExactMatch: p.SignatureHash == state.signatureHash,
+				})
+			}
+			precedentText = corpus.FormatPrecedents(fmtPrecedents)
+		}
+	}
+	corpusSummary.PrecedentsFound = precedentsFound
+
+	// Scrub command and build AST summary for prompt.
+	scrubbedCmd := c.scrubber.Command(state.req.Command)
+	astSummary := c.buildASTTextSummary(state.cmds)
+
+	// Format scopes for prompt (sorted for deterministic ordering).
+	scopeNames := make([]string, 0, len(c.scopes))
+	for name := range c.scopes {
+		scopeNames = append(scopeNames, name)
+	}
+	slices.Sort(scopeNames)
+	var scopeLines []string
+	for _, name := range scopeNames {
+		scopeLines = append(scopeLines, name+": "+strings.Join(c.scopes[name], ", "))
+	}
+
+	vars := llm.PromptVars{
+		Command:    scrubbedCmd,
+		ASTSummary: astSummary,
+		CWD:        state.req.CWD,
+		RuleReason: state.resp.Reason,
+		Scopes:     strings.Join(scopeLines, "\n"),
+		Precedents: precedentText,
+	}
+
+	systemPrompt, userContent := llm.BuildPrompt(c.llmCfg.SystemPrompt, vars)
 
 	// First LLM call.
 	llmReq := llm.ReviewRequest{
@@ -631,7 +644,6 @@ func (c *Classifier) reviewWithLLM(state *classifyState) *LLMReviewResult {
 		result.Decision = llmResp.Decision
 		result.Reasoning = truncateStr(c.scrubber.Text(llmResp.Reasoning), c.maxReasonLen)
 		result.RiskFactors = c.scrubRiskFactors(llmResp.RiskFactors)
-		postProcess()
 		return result
 	}
 
@@ -642,7 +654,6 @@ func (c *Classifier) reviewWithLLM(state *classifyState) *LLMReviewResult {
 		// File retrieval disabled — return first-call response, no second call.
 		result.Decision = llmResp.Decision
 		result.Reasoning = truncateStr(c.scrubber.Text(llmResp.Reasoning), c.maxReasonLen)
-		postProcess()
 		return result
 	}
 
@@ -692,14 +703,12 @@ func (c *Classifier) reviewWithLLM(state *classifyState) *LLMReviewResult {
 	if len(llmResp2.RequestFiles) > 0 {
 		result.Decision = "deny"
 		result.Reasoning = truncateStr("LLM requested files again (two-call maximum enforced)", c.maxReasonLen)
-		postProcess()
 		return result
 	}
 
 	result.Decision = llmResp2.Decision
 	result.Reasoning = truncateStr(c.scrubber.Text(llmResp2.Reasoning), c.maxReasonLen)
 	result.RiskFactors = c.scrubRiskFactors(llmResp2.RiskFactors)
-	postProcess()
 	return result
 }
 
