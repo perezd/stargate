@@ -155,7 +155,7 @@ func HandlePreToolUse(ctx context.Context, stdin io.Reader, stdout io.Writer, st
 
 	// Non-Bash tools pass through immediately.
 	if input.ToolName != "Bash" {
-		return writeAllowResponse(stdout, "non-Bash tool: "+input.ToolName)
+		return writeAllowResponse(stdout, stderr, "non-Bash tool: "+input.ToolName)
 	}
 
 	// Extract command from tool_input.
@@ -199,7 +199,7 @@ func HandlePreToolUse(ctx context.Context, stdin io.Reader, stdout io.Writer, st
 	}
 
 	// Map action to permission decision and write response.
-	return writeClassifyResponse(stdout, resp)
+	return writeClassifyResponse(stdout, stderr, resp)
 }
 
 // parsePreToolUseInput reads and validates the PreToolUse JSON from stdin.
@@ -270,7 +270,7 @@ func mapActionToDecision(action string) string {
 
 // writeAllowResponse writes a permissionDecision=allow to stdout and returns exit 0.
 // Returns exit 2 if writing to stdout fails (broken pipe, etc.).
-func writeAllowResponse(stdout io.Writer, reason string) int {
+func writeAllowResponse(stdout io.Writer, stderr io.Writer, reason string) int {
 	out := hookOutput{
 		HookSpecificOutput: &hookSpecificOutput{
 			HookEventName:            "PreToolUse",
@@ -279,6 +279,7 @@ func writeAllowResponse(stdout io.Writer, reason string) int {
 		},
 	}
 	if err := json.NewEncoder(stdout).Encode(out); err != nil {
+		fmt.Fprintf(stderr, "adapter: writing hook response: %v\n", err)
 		return 2
 	}
 	return 0
@@ -286,7 +287,7 @@ func writeAllowResponse(stdout io.Writer, reason string) int {
 
 // writeClassifyResponse maps the classify response to hook output and writes it.
 // Returns exit 2 if writing to stdout fails.
-func writeClassifyResponse(stdout io.Writer, resp *ClassifyResponse) int {
+func writeClassifyResponse(stdout io.Writer, stderr io.Writer, resp *ClassifyResponse) int {
 	decision := mapActionToDecision(resp.Action)
 
 	out := hookOutput{
@@ -302,6 +303,7 @@ func writeClassifyResponse(stdout io.Writer, resp *ClassifyResponse) int {
 	}
 
 	if err := json.NewEncoder(stdout).Encode(out); err != nil {
+		fmt.Fprintf(stderr, "adapter: writing hook response: %v\n", err)
 		return 2
 	}
 	return 0
