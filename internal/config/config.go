@@ -266,17 +266,26 @@ func (c CorpusConfig) GetMaxEntries() int {
 	return *c.MaxEntries
 }
 
+// RedactedString is a string type that redacts its value in fmt output.
+// Used for credentials that must not appear in logs or debug output.
+type RedactedString string
+
+// String returns "[REDACTED]" to prevent accidental credential exposure
+// via fmt.Sprintf("%v", cfg) or fmt.Sprintf("%+v", parentStruct).
+func (r RedactedString) String() string { return "[REDACTED]" }
+
 // TelemetryConfig holds OpenTelemetry export settings.
 type TelemetryConfig struct {
-	Enabled        bool   `toml:"enabled"`
-	Endpoint       string `toml:"endpoint"`
-	Username       string `toml:"username"`
-	Password       string `toml:"password"`
-	Protocol       string `toml:"protocol"`
-	ExportLogs     bool   `toml:"export_logs"`
-	ExportMetrics  bool   `toml:"export_metrics"`
-	ExportTraces   bool   `toml:"export_traces"`
-	ServiceName    string `toml:"service_name"`
+	Enabled              bool           `toml:"enabled"`
+	Endpoint             string         `toml:"endpoint"`
+	Username             string         `toml:"username"`
+	Password             RedactedString `toml:"password"`
+	Protocol             string         `toml:"protocol"`
+	ExportLogs           bool           `toml:"export_logs"`
+	ExportMetrics        bool           `toml:"export_metrics"`
+	ExportTraces         bool           `toml:"export_traces"`
+	ServiceName          string         `toml:"service_name"`
+	IncludeScrubCommand  bool           `toml:"include_scrubbed_command"`
 }
 
 // LogConfig holds local logging settings.
@@ -646,6 +655,11 @@ func (cfg *Config) Validate() error {
 	// --- Telemetry ---
 	if cfg.Telemetry.Enabled && cfg.Telemetry.Endpoint == "" {
 		return fmt.Errorf("config: telemetry.endpoint is required when telemetry is enabled")
+	}
+	if cfg.Telemetry.Enabled && cfg.Telemetry.Endpoint != "" {
+		if !strings.HasPrefix(cfg.Telemetry.Endpoint, "http://") && !strings.HasPrefix(cfg.Telemetry.Endpoint, "https://") {
+			return fmt.Errorf("config: telemetry.endpoint must use http:// or https:// scheme; got %q", cfg.Telemetry.Endpoint)
+		}
 	}
 	validTelemetryProtocols := map[string]bool{"": true, "http/protobuf": true, "grpc": true}
 	if !validTelemetryProtocols[cfg.Telemetry.Protocol] {
