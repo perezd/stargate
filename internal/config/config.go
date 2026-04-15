@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -663,6 +664,9 @@ func (cfg *Config) Validate() error {
 		epLower := strings.ToLower(cfg.Telemetry.Endpoint)
 		if !strings.HasPrefix(epLower, "http://") && !strings.HasPrefix(epLower, "https://") {
 			return fmt.Errorf("config: telemetry.endpoint must use http:// or https:// scheme; got %q", cfg.Telemetry.Endpoint)
+		}
+		if u, err := url.Parse(cfg.Telemetry.Endpoint); err != nil || u.Host == "" {
+			return fmt.Errorf("config: telemetry.endpoint must be a valid URL with a host; got %q", cfg.Telemetry.Endpoint)
 		}
 	}
 	validTelemetryProtocols := map[string]bool{"": true, "http/protobuf": true}
