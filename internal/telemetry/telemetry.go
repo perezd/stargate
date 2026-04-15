@@ -277,9 +277,15 @@ func (lt *LiveTelemetry) StartFeedbackSpan(ctx context.Context, originalTraceID 
 	if originalTraceID != "" {
 		tid, err := trace.TraceIDFromHex(originalTraceID)
 		if err == nil {
+			// SpanID must be non-zero for the link to be considered valid.
+			// Use a fixed placeholder since we only need the TraceID for correlation.
+			var placeholderSpanID trace.SpanID
+			placeholderSpanID[0] = 0x01
 			link := trace.Link{
 				SpanContext: trace.NewSpanContext(trace.SpanContextConfig{
-					TraceID: tid,
+					TraceID:    tid,
+					SpanID:     placeholderSpanID,
+					TraceFlags: trace.FlagsSampled,
 				}),
 			}
 			opts = append(opts, trace.WithLinks(link))
