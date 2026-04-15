@@ -2229,7 +2229,7 @@ Every classification emits a structured OTel log record with attributes:
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `stargate.scrubbed_command` | string | Post-scrubbing command (only if `include_scrubbed_command = true`) |
-| `stargate.cwd` | string | Working directory (only if `include_scrubbed_command = true`) |
+| `stargate.request_cwd` | string | Per-request working directory from `ClassifyRequest.CWD` (only if `include_scrubbed_command = true`) |
 | `stargate.decision` | string | Final classification |
 | `stargate.action` | string | Hook response: allow, deny, ask |
 | `stargate.rule.level` | string | Which rule tier matched |
@@ -2244,9 +2244,11 @@ Every classification emits a structured OTel log record with attributes:
 
 **Severity mapping:** GREEN → Info, YELLOW → Warn, RED → Error.
 
+**Resolver output contract:** `stargate.scope.resolved` is always exported (not gated behind `include_scrubbed_command`) because resolver output is essential for debugging rule matches. Resolver implementations must not return credentials or secrets — only identifiers (org names, repo names, context names). This contract is enforced via code review when adding new resolvers.
+
 ### 9.3 Metrics
 
-Metric instrument names use underscores (OTel/Prometheus convention). Span and log attribute names use dots.
+Metric instrument names use underscores (OTel/Prometheus convention). Span and log attribute names use dots. Histogram instrument names omit the unit suffix — the unit is set via the OTel instrument `unit` field, and Prometheus OTLP export appends it automatically (e.g., `stargate_classify_duration` with `unit: "ms"` → `stargate_classify_duration_ms_bucket`).
 
 **Counters:**
 
@@ -2261,45 +2263,47 @@ Metric instrument names use underscores (OTel/Prometheus convention). Span and l
 | `stargate_feedback_total` | `outcome` (executed/failed/trace_not_found/trace_expired) |
 | `stargate_scope_resolutions_total` | `resolver`, `result` (resolved/unresolvable) |
 
-**Histograms (all milliseconds):**
+**Histograms (all milliseconds, unit set via instrument field):**
 
-| Metric | Buckets (ms) |
-|--------|-------------|
-| `stargate_classify_duration_ms` | 0.1, 0.5, 1, 2, 5, 10, 50, 100, 500, 1000, 5000, 10000 |
-| `stargate_parse_duration_ms` | 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5 |
-| `stargate_llm_duration_ms` | 50, 100, 250, 500, 1000, 2000, 5000, 10000 |
+| Metric | Unit | Buckets (ms) |
+|--------|------|-------------|
+| `stargate_classify_duration` | ms | 0.1, 0.5, 1, 2, 5, 10, 50, 100, 500, 1000, 5000, 10000 |
+| `stargate_parse_duration` | ms | 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5 |
+| `stargate_llm_duration` | ms | 50, 100, 250, 500, 1000, 2000, 5000, 10000 |
 
 **Gauges:**
 
 | Metric | Labels |
 |--------|--------|
 | `stargate_rules_loaded` | `level` |
-| `stargate_uptime_seconds` | — |
 | `stargate_corpus_entries` | `decision` |
+| `stargate_config_last_reload_timestamp_seconds` | — |
+
+Note: `stargate_config_last_reload_timestamp_seconds` is defined here but implemented in M8 (hot-reload). Set to server start time initially, updated on each successful SIGHUP/POST /reload.
 
 ### 9.4 Traces
 
-Every classification produces a trace rooted at `stargate.classify`:
+Every classification produces a trace rooted at `stargate.classify`. The HTTP handler is wrapped with `otelhttp.NewHandler` to produce standard `http.server.duration` spans around the full request lifecycle.
 
 ```
-stargate.classify                          [total classification latency]
-├── stargate.parse                         [shell AST parsing]
-├── stargate.rules.eval                    [rule engine matching]
-│   └── stargate.rules.match              [per-rule match, only on hit]
-│       └── stargate.scope.resolve        [resolver invocation, if scope-bound rule]
-├── stargate.corpus.lookup                 [precedent search]
-├── stargate.llm.review                    [LLM review, if invoked]
-│   ├── stargate.llm.prompt_build          [initial template interpolation]
-│   ├── stargate.llm.call.1               [first LLM call — verdict or file request]
-│   ├── stargate.llm.file_retrieval        [file reads, if LLM requested files]
-│   │   └── stargate.llm.file_read        [per-file: path, size, truncated, denied]
-│   ├── stargate.llm.prompt_augment        [inject file contents into prompt]
-│   └── stargate.llm.call.2               [second LLM call — final verdict]
-├── stargate.corpus.write                  [new judgment stored]
-└── stargate.response                      [JSON serialization + HTTP write]
+http.server (via otelhttp)                 [full HTTP request lifecycle]
+└── stargate.classify                      [classification pipeline]
+    ├── stargate.parse                     [shell AST parsing]
+    ├── stargate.rules.eval                [rule engine matching]
+    │   └── stargate.rules.match          [per-rule match, only on hit]
+    │       └── stargate.scope.resolve    [resolver invocation, if scope-bound rule]
+    ├── stargate.corpus.lookup             [precedent search]
+    ├── stargate.llm.review                [LLM review, if invoked]
+    │   ├── stargate.llm.prompt_build      [initial template interpolation]
+    │   ├── stargate.llm.call.1           [first LLM call — verdict or file request]
+    │   ├── stargate.llm.file_retrieval    [file reads, if LLM requested files]
+    │   │   └── stargate.llm.file_read    [per-file: path, size, truncated, denied]
+    │   ├── stargate.llm.prompt_augment    [inject file contents into prompt]
+    │   └── stargate.llm.call.2           [second LLM call — final verdict]
+    └── stargate.corpus.write              [new judgment stored]
 ```
 
-**Error status codes:** Any span representing a failure (parse error, LLM timeout, resolver unresolvable, corpus write failure, file retrieval denied, etc.) must call `span.SetStatus(codes.Error, err.Error())`. This enables Grafana's error rate dashboards and trace-level error filtering. Specifically:
+**Error status codes:** Any span representing a failure must call `span.SetStatus(codes.Error, err.Error())`. This enables Grafana's error rate dashboards and trace-level error filtering. Specifically:
 - `stargate.parse` → Error on parse failure (malformed command)
 - `stargate.rules.eval` → Error only on internal rule engine failure (not on RED match — that's a successful classification)
 - `stargate.scope.resolve` → Error on resolver failure (unresolvable is not an error — it's a valid classification outcome)
@@ -2308,17 +2312,18 @@ stargate.classify                          [total classification latency]
 - `stargate.corpus.write` → Error on SQLite write failure
 - `stargate.corpus.lookup` → Error on SQLite query failure
 
-**Feedback spans:** When feedback arrives via `/feedback`, a **new trace** is created with a `trace.Link` pointing to the original classification trace (by `stargate_trace_id` = OTel TraceID). This avoids the architectural problem of adding child spans to an already-ended trace.
+**Feedback spans:** When feedback arrives via `/feedback`, a **new trace** is created with a `trace.Link` pointing to the original classification trace (by `stargate_trace_id` = OTel TraceID). The feedback span also sets `attribute.String("stargate.trace_id", originalTraceID)` so Grafana Tempo search can find feedback traces by classification trace ID. This avoids the architectural problem of adding child spans to an already-ended trace.
 
 ```
 stargate.feedback                          [new trace, linked to original]
 ├── Link → original stargate_trace_id      [Grafana trace-to-trace navigation]
+├── attribute: stargate.trace_id           [searchable in Tempo]
 └── stargate.corpus.write                  [user_approved entry stored]
 ```
 
-In Grafana, operators can navigate from the feedback trace to the original classification trace via the link. The `stargate_trace_id` attribute on both traces enables correlation queries.
+When the original trace ID cannot be resolved (TTLMap expired AND trace file missing), the feedback span is emitted without a Link, the `stargate_feedback_total{outcome="trace_not_found"}` counter is incremented, and an error is logged to stderr. The corpus still records the user approval — only trace correlation is lost.
 
-**Sampling:** Configured via `telemetry.sample_rate` (float64, default 1.0 = 100%). Uses OTel's `ParentBased(TraceIDRatioBased(cfg.SampleRate))`. Metrics and logs are unaffected by trace sampling — they always record. Operators in high-volume environments can reduce to 0.1 or lower.
+**Sampling:** Configured via `telemetry.sample_rate` (`*float64`, default 1.0 = 100%). Uses OTel's `ParentBased(TraceIDRatioBased(cfg.SampleRate))` for classification traces. **Feedback spans are always sampled** regardless of the global rate — feedback is low-volume and high-value for debugging false positives. Metrics and logs are unaffected by trace sampling — they always record.
 
 ### 9.5 No-Op Behavior
 
@@ -2328,18 +2333,19 @@ When `telemetry.enabled = false` (the default), the `Telemetry` struct must be a
 - No goroutines started, no allocations on the hot classification path
 - No panics on nil receivers — the classifier, server, and feedback packages must not nil-check the telemetry struct before every call
 - Implementation: use a concrete struct with no-op method implementations, not a nil pointer with nil checks at call sites
+- `StartSpan` / `StartClassifySpan` return the input context and OTel's `noop.Span{}` (zero-allocation value type), never nil — callers use `defer span.End()` unconditionally
 - Compile-time interface assertion: `var _ Telemetry = (*NoOpTelemetry)(nil)`
 
 **Error handling policy:**
-- `Init` returns error on misconfiguration (bad endpoint, invalid protocol). Caller decides whether to fail hard or fall back to no-op.
-- `Shutdown` flushes providers sequentially: TracerProvider → MeterProvider → LoggerProvider. Each gets a share of the total shutdown budget (default 5s). Errors are joined (not short-circuited) — a failed tracer flush does not skip metric flush. Returns the joined error but callers should log and continue (best-effort).
+- `Init` returns error on misconfiguration (bad endpoint, invalid protocol, SampleRate outside 0.0–1.0). Caller decides whether to fail hard or fall back to no-op.
+- `Shutdown` flushes providers sequentially: TracerProvider → MeterProvider → LoggerProvider → TTLMap.Close(). The same parent context is passed to each provider's Shutdown sequentially — natural deadline pressure ensures all providers attempt flushing. Errors are joined via `errors.Join` (not short-circuited). Returns the joined error but callers should log and continue (best-effort).
 - Metric/log/span recording methods never return errors — OTel SDK handles export failures internally via batch processors
 - If `export_logs`, `export_metrics`, or `export_traces` is false, the corresponding provider is not created (saves resources), but the recording methods still no-op gracefully
 
 **Sensitive data in telemetry:**
 - `stargate.scrubbed_command` attribute uses the **post-scrubbing** command string (after `ScrubbingConfig` patterns have been applied), never the raw input. Only included when `telemetry.include_scrubbed_command = true` (default false).
-- `stargate.cwd` is gated behind the same `include_scrubbed_command` toggle — CWD reveals filesystem structure and project names.
-- `stargate.scope.resolved` is always included but truncated to 256 bytes. Resolver output is low-sensitivity metadata (org/repo names, context names) essential for debugging rule matches.
+- `stargate.request_cwd` is gated behind the same `include_scrubbed_command` toggle — CWD reveals filesystem structure and project names.
+- `stargate.scope.resolved` is always included but truncated to 256 bytes. Resolver output is low-sensitivity metadata — see resolver output contract in §9.2.
 - LLM prompt/response content is never included in spans or logs — only the decision and latency
 - `stargate_trace_id` is safe to export (OTel TraceID, no command content)
 - Feedback tokens are never included in telemetry attributes

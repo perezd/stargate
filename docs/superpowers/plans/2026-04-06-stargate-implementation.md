@@ -2460,21 +2460,32 @@ git commit -m "feat(hook): wire CLI with flag parsing, URL validation, and event
 
 Goal: OTel SDK init, structured logs, metrics, traces, Grafana Cloud export. No-op when disabled.
 
-> **Panel design decisions (pre-implementation):**
+> **Panel design decisions (2 rounds, 8 experts):**
 > - `stargate_trace_id` = OTel TraceID (not a separate identifier)
 > - Feedback spans use `trace.Link` to original trace (not parent-child)
+> - Feedback spans always sampled (independent of global sample_rate)
+> - Feedback span sets `stargate.trace_id` attribute for Tempo search
+> - Feedback with unresolvable trace_id: emit span without Link, increment `trace_not_found`
 > - Metric instrument names use underscores; span/log attributes use dots
+> - Histogram names omit unit suffix (OTel unit field appends it: `stargate_classify_duration` + `unit: ms`)
 > - All histograms standardized on milliseconds
-> - `include_scrubbed_command` (bool, default false) gates `stargate.scrubbed_command` and `stargate.cwd`
-> - `stargate.scope.resolved` always included, truncated to 256 bytes
+> - `include_scrubbed_command` (bool, default false) gates `stargate.scrubbed_command` and `stargate.request_cwd`
+> - `stargate.request_cwd` is the per-request CWD from ClassifyRequest, not server startup CWD
+> - `stargate.scope.resolved` always included, truncated to 256 bytes; resolver contract: no secrets
 > - `TelemetryConfig.Password` has `String()` → `[REDACTED]`
-> - `SampleRate` (float64, default 1.0) with `ParentBased(TraceIDRatioBased)`
-> - Shutdown order: Tracer → Meter → Logger, sequential, errors joined
+> - `SampleRate` uses `*float64` (nil=default 1.0, explicit 0.0=no traces). Validated 0.0–1.0.
+> - Shutdown order: Tracer → Meter → Logger → TTLMap.Close(), same parent ctx, errors joined
 > - In-memory `tool_use_id→trace_id` map: `ttlmap.TTLMap` (10min TTL, 10k cap)
 > - Span error status on all failure paths (see spec §9.4 for full list)
 > - Env var overrides log warning at startup (accepted risk for trust boundary)
-> - No-op struct with compile-time interface assertion
-> - `stargate.command` attribute uses post-scrubbing value, never raw input
+> - No-op struct with compile-time interface assertion; StartSpan returns noop.Span, never nil
+> - `stargate.scrubbed_command` attribute uses post-scrubbing value, never raw input
+> - `stargate_uptime_seconds` gauge dropped (derivable from process metadata)
+> - `stargate_config_last_reload_timestamp_seconds` gauge added (implemented in M8)
+> - `stargate.response` span dropped (sub-microsecond, no debugging value)
+> - HTTP handler wrapped with `otelhttp.NewHandler` for standard HTTP spans
+> - `ClassifyResult` type defined in telemetry package (avoids circular import with classifier)
+> - `stargate_classify_duration` → Prometheus auto-suffixes to `_ms_bucket` via unit field
 
 ### Task 7.1: OTel SDK initialization and no-op
 
@@ -2486,8 +2497,8 @@ Goal: OTel SDK init, structured logs, metrics, traces, Grafana Cloud export. No-
 - [ ] **Step 1: Update TelemetryConfig**
 
 Add fields to `TelemetryConfig`:
-- `IncludeScrubCommand bool   toml:"include_scrubbed_command"` (default false)
-- `SampleRate          float64 toml:"sample_rate"` (default 1.0, validated 0.0–1.0)
+- `IncludeScrubCommand bool      toml:"include_scrubbed_command"` (default false)
+- `SampleRate          *float64  toml:"sample_rate"` (nil=default 1.0, explicit 0.0=no traces, validated 0.0–1.0)
 
 Add `String()` method to `TelemetryConfig` that redacts `Password` to `[REDACTED]`.
 
@@ -2516,7 +2527,7 @@ type Telemetry interface {
 var _ Telemetry = (*NoOpTelemetry)(nil) // compile-time assertion
 ```
 
-NoOpTelemetry: all methods are no-ops, no goroutines, no allocations. `TraceIDFromContext` returns empty string.
+NoOpTelemetry: all methods are no-ops, no goroutines, no allocations. `StartSpan`/`StartClassifySpan` return the input context and OTel's `noop.Span{}` (zero-allocation value type), never nil — callers use `defer span.End()` unconditionally. `TraceIDFromContext` returns empty string.
 
 - [ ] **Step 3: Implement Init function**
 
@@ -2528,8 +2539,8 @@ NoOpTelemetry: all methods are no-ops, no goroutines, no allocations. `TraceIDFr
 - Log warning if any `STARGATE_OTEL_*` env var overrides are active.
 
 `Shutdown(ctx context.Context) error`:
-- Sequential: TracerProvider.Shutdown → MeterProvider.Shutdown → LoggerProvider.Shutdown.
-- Each gets a share of the context deadline. Errors are joined via `errors.Join`, not short-circuited.
+- Sequential: TracerProvider.Shutdown → MeterProvider.Shutdown → LoggerProvider.Shutdown → TTLMap.Close().
+- Same parent context passed to each sequentially (natural deadline pressure). Errors joined via `errors.Join`, not short-circuited.
 
 - [ ] **Step 4: Write tests**
 
@@ -2559,10 +2570,12 @@ git commit -m "feat(telemetry): OTel SDK init, no-op implementation, config upda
 
 All counter, histogram, and gauge instruments from spec §9.3. Instrument names use underscores (`stargate_classifications_total`, not `stargate.classifications_total`).
 
-Histograms all use milliseconds:
-- `stargate_classify_duration_ms`: 0.1, 0.5, 1, 2, 5, 10, 50, 100, 500, 1000, 5000, 10000
-- `stargate_parse_duration_ms`: 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5
-- `stargate_llm_duration_ms`: 50, 100, 250, 500, 1000, 2000, 5000, 10000
+Histogram instrument names omit unit suffix (OTel unit field appends it for Prometheus). All use `unit: "ms"`:
+- `stargate_classify_duration` (ms): 0.1, 0.5, 1, 2, 5, 10, 50, 100, 500, 1000, 5000, 10000
+- `stargate_parse_duration` (ms): 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5
+- `stargate_llm_duration` (ms): 50, 100, 250, 500, 1000, 2000, 5000, 10000
+
+Gauges: `stargate_rules_loaded`, `stargate_corpus_entries`. `stargate_config_last_reload_timestamp_seconds` defined but implemented in M8.
 
 Recording methods: `RecordClassification`, `RecordLLMCall`, `RecordParseError`, `RecordFeedback`, `RecordCorpusHit`, `RecordCorpusWrite`, `RecordScopeResolution`, `SetRulesLoaded`, `SetCorpusEntries`.
 
@@ -2588,9 +2601,28 @@ git commit -m "feat(telemetry): register all OTel metrics with underscore naming
 
 - [ ] **Step 1: Implement LogClassification**
 
+Define `ClassifyResult` struct in the telemetry package (avoids circular import with classifier):
+```go
+type ClassifyResult struct {
+    Decision        string  // green/yellow/red
+    Action          string  // allow/deny/ask
+    RuleLevel       string  // matched rule tier
+    RuleReason      string  // matched rule reason
+    TotalMs         float64
+    LLMCalled       bool
+    LLMDecision     string
+    LLMDurationMs   float64
+    CorpusPrecedents int
+    ScopeResolved   string
+    SessionID       string
+    ScrubCommand    string  // post-scrubbing command (may be empty)
+    RequestCWD      string  // per-request CWD from ClassifyRequest
+}
+```
+
 `LogClassification(ctx context.Context, result ClassifyResult)`:
 - Emits OTel log record with all attributes from spec §9.2
-- `stargate.scrubbed_command` and `stargate.cwd` only included when `cfg.IncludeScrubCommand = true`
+- `stargate.scrubbed_command` and `stargate.request_cwd` only included when `cfg.IncludeScrubCommand = true`
 - `stargate.scope.resolved` truncated to 256 bytes
 - Severity mapped: GREEN → Info, YELLOW → Warn, RED → Error
 
@@ -2598,8 +2630,8 @@ git commit -m "feat(telemetry): register all OTel metrics with underscore naming
 
 Test with in-memory log exporter:
 - All attributes present in log record
-- `scrubbed_command` and `cwd` absent when `IncludeScrubCommand = false`
-- `scrubbed_command` and `cwd` present when `IncludeScrubCommand = true`
+- `scrubbed_command` and `request_cwd` absent when `IncludeScrubCommand = false`
+- `scrubbed_command` and `request_cwd` present when `IncludeScrubCommand = true`
 - `scope.resolved` truncated at 256 bytes
 - Severity mapping correct for each decision level
 
@@ -2623,19 +2655,22 @@ git commit -m "feat(telemetry): structured OTel log records with attribute gatin
 
 - [ ] **Step 2: Implement feedback span with Link**
 
-When feedback arrives, create a new root span `stargate.feedback` with `trace.Link` to the original trace. The link target is the `stargate_trace_id` (OTel TraceID) stored in the in-memory `ttlmap` or loaded from the trace file.
+When feedback arrives, create a new root span `stargate.feedback` using an **AlwaysSample** tracer (feedback is always sampled regardless of global sample_rate). Set `trace.Link` to the original trace and `attribute.String("stargate.trace_id", originalTraceID)` for Tempo search. When the original trace ID cannot be resolved (TTLMap miss AND trace file missing), emit the span without a Link and increment `stargate_feedback_total{outcome="trace_not_found"}`.
 
 - [ ] **Step 3: Implement in-memory tool_use_id → trace_id map**
 
-`ttlmap.TTLMap[string, string]` with 10-minute TTL, 10,000 max entries. Populated in classify path, queried in feedback path. Map miss falls through to adapter trace file.
+`ttlmap.TTLMap[string, string]` with 10-minute TTL, 10,000 max entries. Populated in classify path, queried in feedback path. Map miss falls through to adapter trace file. **Lifecycle:** owned by `LiveTelemetry`, closed in `Shutdown` after OTel providers (see Task 7.1 Step 3).
 
 - [ ] **Step 4: Write tests**
 
 Test with in-memory span exporter:
-- Classify span tree matches spec §9.4 structure
+- Classify span tree matches spec §9.4 structure (no `stargate.response` span)
 - `TraceIDFromContext` returns correct hex TraceID
 - Error spans have `codes.Error` status set (test each error path from §9.4)
 - Feedback span has Link to original TraceID (not parent-child)
+- Feedback span has `stargate.trace_id` attribute set
+- Feedback span is always sampled even when global SampleRate is 0.0
+- Feedback with unresolvable trace_id: span emitted without Link, no error
 - tool_use_id map populated on classify, queried on feedback
 - Map miss returns empty, doesn't error
 
@@ -2655,7 +2690,7 @@ git commit -m "feat(telemetry): trace spans with Link-based feedback and error s
 
 - [ ] **Step 1: Initialize telemetry in serve.go**
 
-Call `telemetry.Init(cfg.Telemetry)` during server startup. Pass `Telemetry` interface to classifier, server, and feedback handler constructors. Wire `Shutdown` into graceful shutdown path.
+Call `telemetry.Init(cfg.Telemetry)` during server startup. Pass `Telemetry` interface to classifier, server, and feedback handler constructors. Wire `Shutdown` into graceful shutdown path. Wrap HTTP mux with `otelhttp.NewHandler` for standard HTTP spans (`http.server.duration` with `http.method`, `http.status_code`, `http.route` attributes).
 
 - [ ] **Step 2: Add spans to classify pipeline**
 
