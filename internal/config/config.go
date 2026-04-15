@@ -661,9 +661,9 @@ func (cfg *Config) Validate() error {
 			return fmt.Errorf("config: telemetry.endpoint must use http:// or https:// scheme; got %q", cfg.Telemetry.Endpoint)
 		}
 	}
-	validTelemetryProtocols := map[string]bool{"": true, "http/protobuf": true, "grpc": true}
+	validTelemetryProtocols := map[string]bool{"": true, "http/protobuf": true}
 	if !validTelemetryProtocols[cfg.Telemetry.Protocol] {
-		return fmt.Errorf("config: telemetry.protocol must be http/protobuf or grpc; got %q", cfg.Telemetry.Protocol)
+		return fmt.Errorf("config: telemetry.protocol must be http/protobuf; got %q", cfg.Telemetry.Protocol)
 	}
 
 	// --- Log ---

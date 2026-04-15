@@ -257,7 +257,11 @@ func New(cfg *config.Config) (*Classifier, error) {
 
 // SetTelemetry injects a Telemetry implementation. Must be called before
 // the first Classify call. Not thread-safe — call during initialization only.
+// Nil is treated as NoOp.
 func (c *Classifier) SetTelemetry(t telemetry.Telemetry) {
+	if t == nil {
+		t = &telemetry.NoOpTelemetry{}
+	}
 	c.tel = t
 }
 
@@ -315,8 +319,10 @@ func (c *Classifier) Classify(ctx context.Context, req ClassifyRequest) *Classif
 	}
 
 	// Store tool_use_id → trace_id for feedback correlation.
-	if toolUseID, ok := req.Context["tool_use_id"].(string); ok && toolUseID != "" {
-		c.tel.StoreToolUseTrace(toolUseID, traceID)
+	if req.Context != nil {
+		if toolUseID, ok := req.Context["tool_use_id"].(string); ok && toolUseID != "" {
+			c.tel.StoreToolUseTrace(toolUseID, traceID)
+		}
 	}
 
 	// Normalize command — owned by the classifier so all entry points
@@ -335,7 +341,11 @@ func (c *Classifier) Classify(ctx context.Context, req ClassifyRequest) *Classif
 
 	finalize := func() *ClassifyResponse {
 		resp.Timing.TotalMs = float64(time.Since(start).Microseconds()) / 1000
-		c.tel.RecordClassification(resp.Decision, resp.Action, resp.Timing.TotalMs)
+		ruleLevel := "none"
+		if resp.Rule != nil {
+			ruleLevel = resp.Rule.Level
+		}
+		c.tel.RecordClassification(resp.Decision, ruleLevel, resp.Timing.TotalMs)
 		return resp
 	}
 
