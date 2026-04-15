@@ -65,3 +65,11 @@ Risks evaluated by the expert panel and accepted with documented mitigations.
 **Mitigation:** `tool_name` is controlled by the agent framework (Claude Code), not by the command being classified. A prompt injection that changes the tool name would need to compromise Claude Code's internal tool dispatch, which is outside stargate's trust boundary. Stargate classifies what it's told to classify — if the agent doesn't send it, stargate can't see it.
 
 **Panel:** M6-R2-RedTeam-3
+
+## Telemetry Env Var Overrides Bypass stargate.toml
+
+**Risk:** `STARGATE_OTEL_ENDPOINT`, `STARGATE_OTEL_USERNAME`, and `STARGATE_OTEL_PASSWORD` environment variables allow redirecting telemetry export to an attacker-controlled endpoint. If `include_scrubbed_command = true`, scrubbed command text would be exfiltrated to the rogue endpoint.
+
+**Mitigation:** An attacker with process environment write access already has local code execution and can read commands directly. The env vars are intended for CI/CD secret injection where the TOML file doesn't contain credentials. A warning-level log is emitted at startup when any override is active. The default is `include_scrubbed_command = false`, so even a redirected endpoint receives no command content without explicit opt-in.
+
+**Panel:** M7-R1-Compliance-4

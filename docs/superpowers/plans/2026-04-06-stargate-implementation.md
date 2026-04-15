@@ -2458,51 +2458,226 @@ git commit -m "feat(hook): wire CLI with flag parsing, URL validation, and event
 
 ## M7: Telemetry
 
-Goal: OTel SDK init, structured logs, metrics, traces, Grafana Cloud export.
+Goal: OTel SDK init, structured logs, metrics, traces, Grafana Cloud export. No-op when disabled.
 
-### Task 7.1: OTel SDK initialization
+> **Panel design decisions (pre-implementation):**
+> - `stargate_trace_id` = OTel TraceID (not a separate identifier)
+> - Feedback spans use `trace.Link` to original trace (not parent-child)
+> - Metric instrument names use underscores; span/log attributes use dots
+> - All histograms standardized on milliseconds
+> - `include_scrubbed_command` (bool, default false) gates `stargate.scrubbed_command` and `stargate.cwd`
+> - `stargate.scope.resolved` always included, truncated to 256 bytes
+> - `TelemetryConfig.Password` has `String()` → `[REDACTED]`
+> - `SampleRate` (float64, default 1.0) with `ParentBased(TraceIDRatioBased)`
+> - Shutdown order: Tracer → Meter → Logger, sequential, errors joined
+> - In-memory `tool_use_id→trace_id` map: `ttlmap.TTLMap` (10min TTL, 10k cap)
+> - Span error status on all failure paths (see spec §9.4 for full list)
+> - Env var overrides log warning at startup (accepted risk for trust boundary)
+> - No-op struct with compile-time interface assertion
+> - `stargate.command` attribute uses post-scrubbing value, never raw input
+
+### Task 7.1: OTel SDK initialization and no-op
 
 **Files:**
 - Create: `internal/telemetry/telemetry.go`
 - Create: `internal/telemetry/telemetry_test.go`
+- Modify: `internal/config/config.go` (add `IncludeScrubCommand`, `SampleRate` to TelemetryConfig)
 
-- [ ] **Step 1: Implement OTel init and shutdown**
+- [ ] **Step 1: Update TelemetryConfig**
 
-`Init(cfg config.TelemetryConfig) (*Telemetry, error)` — create OTLP/HTTP exporters for logs, metrics, traces. Configure batch processors, sampling, auth. `Shutdown(ctx context.Context) error` — flush and close all providers.
+Add fields to `TelemetryConfig`:
+- `IncludeScrubCommand bool   toml:"include_scrubbed_command"` (default false)
+- `SampleRate          float64 toml:"sample_rate"` (default 1.0, validated 0.0–1.0)
 
-When `telemetry.enabled = false`, return a no-op `Telemetry` struct where all methods are no-ops.
+Add `String()` method to `TelemetryConfig` that redacts `Password` to `[REDACTED]`.
 
-- [ ] **Step 2: Test with disabled telemetry (no-op path), commit**
+- [ ] **Step 2: Define Telemetry interface and no-op implementation**
 
-```bash
-git add internal/telemetry/
-git commit -m "feat(telemetry): add OTel SDK initialization with OTLP/HTTP exporters"
+```go
+// Telemetry is the interface for all telemetry operations.
+// Implemented by LiveTelemetry (enabled) and NoOpTelemetry (disabled).
+type Telemetry interface {
+    Shutdown(ctx context.Context) error
+    StartClassifySpan(ctx context.Context) (context.Context, trace.Span)
+    StartSpan(ctx context.Context, name string) (context.Context, trace.Span)
+    LogClassification(ctx context.Context, result ClassifyResult)
+    RecordClassification(decision, ruleLevel string, durationMs float64)
+    RecordLLMCall(outcome string, durationMs float64)
+    RecordParseError()
+    RecordFeedback(outcome string)
+    RecordCorpusHit(hitType string)
+    RecordCorpusWrite(decision string)
+    RecordScopeResolution(resolver, result string)
+    SetRulesLoaded(level string, count int)
+    SetCorpusEntries(decision string, count int)
+    TraceIDFromContext(ctx context.Context) string
+}
+
+var _ Telemetry = (*NoOpTelemetry)(nil) // compile-time assertion
 ```
 
-### Task 7.2: Structured logging, metrics, and traces
+NoOpTelemetry: all methods are no-ops, no goroutines, no allocations. `TraceIDFromContext` returns empty string.
+
+- [ ] **Step 3: Implement Init function**
+
+`Init(cfg config.TelemetryConfig) (Telemetry, error)`:
+- If `!cfg.Enabled`, return `&NoOpTelemetry{}`.
+- Create OTLP/HTTP exporters with auth (Username/Password).
+- Configure `ParentBased(TraceIDRatioBased(cfg.SampleRate))` sampler.
+- Create providers only for enabled signals (`export_logs`, `export_metrics`, `export_traces`).
+- Log warning if any `STARGATE_OTEL_*` env var overrides are active.
+
+`Shutdown(ctx context.Context) error`:
+- Sequential: TracerProvider.Shutdown → MeterProvider.Shutdown → LoggerProvider.Shutdown.
+- Each gets a share of the context deadline. Errors are joined via `errors.Join`, not short-circuited.
+
+- [ ] **Step 4: Write tests**
+
+Test (use in-memory exporters, not real OTLP):
+- `Init` with `Enabled=false` → returns NoOpTelemetry
+- `Init` with `Enabled=true` → returns LiveTelemetry
+- NoOpTelemetry methods don't panic, don't allocate (benchmark)
+- `Shutdown` calls all providers even if first one errors
+- `SampleRate` validation (0.0–1.0 range, reject negative/>1.0)
+- `String()` on TelemetryConfig redacts password
+- Env var override warning logged when active
+- Error dispositions: Init returns error, Shutdown joins errors, recording methods never error
+
+- [ ] **Step 5: Commit**
+
+```bash
+git commit -m "feat(telemetry): OTel SDK init, no-op implementation, config updates"
+```
+
+### Task 7.2: Metrics registration
 
 **Files:**
-- Create: `internal/telemetry/logger.go`
 - Create: `internal/telemetry/metrics.go`
-- Create: `internal/telemetry/tracer.go`
+- Create: `internal/telemetry/metrics_test.go`
 
-- [ ] **Step 1: Implement logger, metrics, tracer**
+- [ ] **Step 1: Register all instruments**
 
-`logger.go`: `LogClassification(result ClassifyResult)` — emit structured OTel log record with all attributes from spec §9.2.
+All counter, histogram, and gauge instruments from spec §9.3. Instrument names use underscores (`stargate_classifications_total`, not `stargate.classifications_total`).
 
-`metrics.go`: Register all counters, histograms, and gauges from spec §9.3. `RecordClassification(...)`, `RecordLLMCall(...)`, `RecordFeedback(...)`.
+Histograms all use milliseconds:
+- `stargate_classify_duration_ms`: 0.1, 0.5, 1, 2, 5, 10, 50, 100, 500, 1000, 5000, 10000
+- `stargate_parse_duration_ms`: 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5
+- `stargate_llm_duration_ms`: 50, 100, 250, 500, 1000, 2000, 5000, 10000
 
-`tracer.go`: `StartClassifySpan(ctx context.Context) (context.Context, trace.Span)`. Generate `stargate_trace_id`. Create span tree per spec §9.4.
+Recording methods: `RecordClassification`, `RecordLLMCall`, `RecordParseError`, `RecordFeedback`, `RecordCorpusHit`, `RecordCorpusWrite`, `RecordScopeResolution`, `SetRulesLoaded`, `SetCorpusEntries`.
 
-- [ ] **Step 2: Wire telemetry into classifier, server, and feedback**
+- [ ] **Step 2: Write tests**
 
-Add span creation and metric recording at each pipeline stage.
+Test with in-memory metric reader:
+- Each Record* method increments the correct counter with correct labels
+- Histogram observations land in expected buckets
+- Gauge values update correctly
+- NoOp implementation doesn't register instruments (no goroutines, no memory)
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add internal/telemetry/
-git commit -m "feat(telemetry): add structured logging, metrics, and trace spans"
+git commit -m "feat(telemetry): register all OTel metrics with underscore naming"
+```
+
+### Task 7.3: Structured logging
+
+**Files:**
+- Create: `internal/telemetry/logger.go`
+- Create: `internal/telemetry/logger_test.go`
+
+- [ ] **Step 1: Implement LogClassification**
+
+`LogClassification(ctx context.Context, result ClassifyResult)`:
+- Emits OTel log record with all attributes from spec §9.2
+- `stargate.scrubbed_command` and `stargate.cwd` only included when `cfg.IncludeScrubCommand = true`
+- `stargate.scope.resolved` truncated to 256 bytes
+- Severity mapped: GREEN → Info, YELLOW → Warn, RED → Error
+
+- [ ] **Step 2: Write tests**
+
+Test with in-memory log exporter:
+- All attributes present in log record
+- `scrubbed_command` and `cwd` absent when `IncludeScrubCommand = false`
+- `scrubbed_command` and `cwd` present when `IncludeScrubCommand = true`
+- `scope.resolved` truncated at 256 bytes
+- Severity mapping correct for each decision level
+
+- [ ] **Step 3: Commit**
+
+```bash
+git commit -m "feat(telemetry): structured OTel log records with attribute gating"
+```
+
+### Task 7.4: Trace spans
+
+**Files:**
+- Create: `internal/telemetry/tracer.go`
+- Create: `internal/telemetry/tracer_test.go`
+
+- [ ] **Step 1: Implement span creation**
+
+`StartClassifySpan(ctx) (ctx, span)` — creates root `stargate.classify` span.
+`StartSpan(ctx, name) (ctx, span)` — creates child span with given name.
+`TraceIDFromContext(ctx) string` — extracts OTel TraceID as hex string (= `stargate_trace_id`).
+
+- [ ] **Step 2: Implement feedback span with Link**
+
+When feedback arrives, create a new root span `stargate.feedback` with `trace.Link` to the original trace. The link target is the `stargate_trace_id` (OTel TraceID) stored in the in-memory `ttlmap` or loaded from the trace file.
+
+- [ ] **Step 3: Implement in-memory tool_use_id → trace_id map**
+
+`ttlmap.TTLMap[string, string]` with 10-minute TTL, 10,000 max entries. Populated in classify path, queried in feedback path. Map miss falls through to adapter trace file.
+
+- [ ] **Step 4: Write tests**
+
+Test with in-memory span exporter:
+- Classify span tree matches spec §9.4 structure
+- `TraceIDFromContext` returns correct hex TraceID
+- Error spans have `codes.Error` status set (test each error path from §9.4)
+- Feedback span has Link to original TraceID (not parent-child)
+- tool_use_id map populated on classify, queried on feedback
+- Map miss returns empty, doesn't error
+
+- [ ] **Step 5: Commit**
+
+```bash
+git commit -m "feat(telemetry): trace spans with Link-based feedback and error status"
+```
+
+### Task 7.5: Wire telemetry into pipeline
+
+**Files:**
+- Modify: `internal/classifier/classifier.go`
+- Modify: `internal/server/server.go`
+- Modify: `internal/feedback/handler.go`
+- Modify: `cmd/stargate/serve.go`
+
+- [ ] **Step 1: Initialize telemetry in serve.go**
+
+Call `telemetry.Init(cfg.Telemetry)` during server startup. Pass `Telemetry` interface to classifier, server, and feedback handler constructors. Wire `Shutdown` into graceful shutdown path.
+
+- [ ] **Step 2: Add spans to classify pipeline**
+
+In classifier: wrap each stage (parse, rules.eval, corpus.lookup, llm.review, corpus.write, response) with `StartSpan`. Set `span.SetStatus(codes.Error, ...)` on failure paths. Call `RecordClassification` and `LogClassification` at pipeline end. Extract `stargate_trace_id` via `TraceIDFromContext`.
+
+- [ ] **Step 3: Add spans to feedback pipeline**
+
+In feedback handler: create feedback span with Link. Call `RecordFeedback`. Populate tool_use_id map on classify, query on feedback.
+
+- [ ] **Step 4: Write integration tests**
+
+Test with in-memory exporters:
+- Full classify pipeline produces expected span tree
+- Metrics incremented after classification
+- Log record emitted after classification
+- Feedback produces linked trace
+- Disabled telemetry (`Enabled=false`) → no spans, no metrics, no logs, no goroutines
+
+- [ ] **Step 5: Commit**
+
+```bash
+git commit -m "feat(telemetry): wire OTel into classify, feedback, and server pipelines"
 ```
 
 ---
