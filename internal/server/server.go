@@ -51,8 +51,8 @@ func New(cfg *config.Config) (*Server, error) {
 	return s, nil
 }
 
-// SetTelemetry injects a Telemetry implementation into the server and its
-// classifier. Must be called before serving requests.
+// SetTelemetry injects a Telemetry implementation into the classifier.
+// Must be called before serving requests.
 func (s *Server) SetTelemetry(t telemetry.Telemetry) {
 	if s.clf != nil {
 		s.clf.SetTelemetry(t)

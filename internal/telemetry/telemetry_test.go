@@ -140,21 +140,6 @@ func TestShutdown_LiveTelemetry(t *testing.T) {
 	}
 }
 
-func TestEnvOverrideWarning(t *testing.T) {
-	// Set env var and verify no panic during Init.
-	t.Setenv("STARGATE_OTEL_ENDPOINT", "https://override.example.com")
-	cfg := config.TelemetryConfig{
-		Enabled:      true,
-		Endpoint:     "https://localhost:4318",
-		ExportTraces: true,
-	}
-	tel, err := Init(cfg)
-	if err != nil {
-		t.Fatalf("Init with env override: %v", err)
-	}
-	defer tel.Shutdown(context.Background())
-}
-
 func TestHTTPWithCredentialsWarning(t *testing.T) {
 	// http:// with credentials should not error, just warn.
 	cfg := config.TelemetryConfig{
@@ -218,6 +203,5 @@ func searchSubstring(s, substr string) bool {
 }
 
 func TestMain(m *testing.M) {
-	// Suppress log output during tests.
 	os.Exit(m.Run())
 }

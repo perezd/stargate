@@ -74,7 +74,7 @@ func TestStartSpan_ChildOfClassify(t *testing.T) {
 	}
 
 	// Child should have the classify span as parent.
-	classifySC := classifySpan.(interface{ SpanContext() trace.SpanContext }).SpanContext()
+	classifySC := classifySpan.SpanContext()
 	if parseSpan.Parent.SpanID() != classifySC.SpanID() {
 		t.Errorf("parse span parent: got %s, want %s", parseSpan.Parent.SpanID(), classifySC.SpanID())
 	}

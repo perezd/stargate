@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log"
 	"net/url"
-	"os"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -133,8 +132,8 @@ func Init(cfg config.TelemetryConfig) (Telemetry, error) {
 		return &NoOpTelemetry{}, nil
 	}
 
-	// Check for env var overrides and log warnings.
-	checkEnvOverrides()
+	// Note: STARGATE_OTEL_* env var overrides are resolved in config loading,
+	// not here. The telemetry package receives the final resolved config.
 
 	// Warn on http:// with credentials.
 	if cfg.Username != "" || cfg.Password != "" {
@@ -322,23 +321,6 @@ func (lt *LiveTelemetry) LookupToolUseTrace(toolUseID string) string {
 	return ""
 }
 
-// checkEnvOverrides logs warnings for active STARGATE_OTEL_* env var overrides.
-func checkEnvOverrides() {
-	overrides := []struct {
-		env  string
-		desc string
-	}{
-		{"STARGATE_OTEL_ENDPOINT", "endpoint"},
-		{"STARGATE_OTEL_USERNAME", "username"},
-		{"STARGATE_OTEL_PASSWORD", "password"},
-	}
-	for _, o := range overrides {
-		if v := os.Getenv(o.env); v != "" {
-			log.Printf("telemetry: WARNING: %s overriding telemetry.%s from environment", o.env, o.desc)
-		}
-	}
-}
-
 // exportOpts groups exporter options by signal type.
 type exportOpts struct {
 	trace  []otlptracehttp.Option
@@ -352,18 +334,22 @@ func buildExportOpts(cfg config.TelemetryConfig) exportOpts {
 
 	endpoint := cfg.Endpoint
 
-	// Strip scheme for OTel HTTP exporters (they accept host:port only).
+	// Parse endpoint to separate host:port from path.
+	// OTel HTTP exporters use WithEndpoint for host:port and WithURLPath for the path.
 	u, err := url.Parse(endpoint)
 	if err == nil && u.Host != "" {
 		endpoint = u.Host
-		if u.Path != "" && u.Path != "/" {
-			endpoint = u.Host + u.Path
-		}
 
 		if u.Scheme == "http" {
 			opts.trace = append(opts.trace, otlptracehttp.WithInsecure())
 			opts.metric = append(opts.metric, otlpmetrichttp.WithInsecure())
 			opts.log = append(opts.log, otlploghttp.WithInsecure())
+		}
+
+		if u.Path != "" && u.Path != "/" {
+			opts.trace = append(opts.trace, otlptracehttp.WithURLPath(u.Path))
+			opts.metric = append(opts.metric, otlpmetrichttp.WithURLPath(u.Path))
+			opts.log = append(opts.log, otlploghttp.WithURLPath(u.Path))
 		}
 	}
 
