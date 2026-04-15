@@ -2664,7 +2664,13 @@ When feedback arrives, create a new root span `stargate.feedback`. Set `trace.Li
 
 - [ ] **Step 3: Implement in-memory tool_use_id → trace_id map**
 
-`ttlmap.New[string, string](context.Background(), 10*time.Minute, 10_000)` — 10-minute TTL, 10,000 max entries. Uses `context.Background()` so the sweep goroutine runs until `Close()` is called (not tied to a cancellable context). Populated in classify path, queried in feedback path. Map miss falls through to adapter trace file. **Lifecycle:** owned by `LiveTelemetry`, closed in `Shutdown` after TracerProvider but before MeterProvider (see Task 7.1 Step 3).
+`ttlmap.New[string, string](context.Background(), ttlmap.Options{MaxEntries: 10_000})` — 10,000 entry cap. TTL of 10 minutes passed per-call via `Set(toolUseID, traceID, 10*time.Minute)`. Uses `context.Background()` so the sweep goroutine runs until `Close()` is called (not tied to a cancellable context). Populated in classify path, queried in feedback path. Map miss falls through to adapter trace file. **Lifecycle:** owned by `LiveTelemetry`, closed in `Shutdown` after TracerProvider but before MeterProvider (see Task 7.1 Step 3).
+
+**Implementation notes:**
+- `stargate.scope.resolved` truncation must use byte length (`s[:256]`), not rune count
+- `otelhttp.NewHandler` needs explicit route names per handler, or set `http.route` attribute manually
+- `stargate_config_last_reload_timestamp_seconds` uses unit `"s"` (epoch seconds), not `"ms"`
+- `telemetry.endpoint` should be validated for `http://` or `https://` scheme in `Validate()`
 
 - [ ] **Step 4: Write tests**
 
