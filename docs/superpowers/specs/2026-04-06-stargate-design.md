@@ -2306,7 +2306,28 @@ stargate.classify                          [original trace]
 
 This means a single trace in Grafana shows the complete lifecycle: classification → LLM review → user approval → corpus update.
 
-### 9.5 Environment Variable Overrides
+### 9.5 No-Op Behavior
+
+When `telemetry.enabled = false` (the default), the `Telemetry` struct must be a true no-op:
+
+- All methods are safe to call and return immediately
+- No goroutines started, no allocations on the hot classification path
+- No panics on nil receivers — the classifier, server, and feedback packages must not nil-check the telemetry struct before every call
+- Implementation: use a concrete struct with no-op method implementations, not a nil pointer with nil checks at call sites
+
+**Error handling policy:**
+- `Init` returns error on misconfiguration (bad endpoint, invalid protocol). Caller decides whether to fail hard or fall back to no-op.
+- `Shutdown` returns error but callers should log and continue (best-effort flush)
+- Metric/log/span recording methods never return errors — OTel SDK handles export failures internally via batch processors
+- If `export_logs`, `export_metrics`, or `export_traces` is false, the corresponding provider is not created (saves resources), but the recording methods still no-op gracefully
+
+**Sensitive data in telemetry:**
+- `stargate.command` attribute is only included when `telemetry.log_commands = true` (maps to `logging.log_commands` in config). Default false.
+- LLM prompt/response content is never included in spans or logs — only the decision and latency
+- `stargate_trace_id` is safe to export (opaque identifier, no command content)
+- Feedback tokens are never included in telemetry attributes
+
+### 9.6 Environment Variable Overrides
 
 | Environment Variable | Config Equivalent |
 |---------------------|-------------------|

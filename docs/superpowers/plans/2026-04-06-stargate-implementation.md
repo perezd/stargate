@@ -2173,6 +2173,68 @@ Goal: Claude Code adapter with pre-tool-use and post-tool-use event handling. Th
 > - Unknown action values fail-closed to deny
 > - hook.go stub must return exit 2 (not exit 1)
 
+> **M6 Retrospective (post-implementation):** 34 threads, 10 Copilot review rounds, 1 PR.
+> Scope was smaller than M5 (1983 lines, 8 files, 1 new package) and thread count dropped
+> accordingly (M5:100 → M6:34). The panel review caught 10 design issues pre-implementation
+> that would have been review threads otherwise. The M5 prediction ("should return toward
+> the M3 trajectory") was roughly correct.
+>
+> **Four patterns drove the 34 threads:**
+>
+> 1. **Security operation ordering (6 threads)** — Chmod before Lstat (symlink follow),
+>    O_CREATE permissions not enforced on existing files, storeTrace writing empty
+>    FeedbackToken creating orphans, empty tool_name allowing instead of failing-closed.
+>    **Lesson:** Security-sensitive operations need explicit ordering justification in the
+>    plan. "Lstat then Chmod" and "validate then use" should be plan-level constraints,
+>    not discovered in review. The panel caught O_NOFOLLOW but missed the Chmod ordering.
+>
+> 2. **Error visibility (10 threads)** — fmt.Fprintf(io.Discard) bug, stderr parameter
+>    missing from HandlePreToolUse, storeTrace errors silently discarded, DeleteTrace errors
+>    ignored, writeAllowResponse/writeClassifyResponse dropping encode errors, doc comment
+>    saying "silent" when stderr was used. **Lesson:** Every error path needs an explicit
+>    disposition in the plan: (a) log to stderr, (b) return error, or (c) intentionally
+>    discard with documented reason. The plan should specify stderr as a parameter for any
+>    function that can fail silently. "Fire-and-forget" must still log.
+>
+> 3. **Test quality (8 threads)** — Real-clock sleep in timeout test, racy retry test with
+>    goroutine leak, test assertions that don't assert (t.Logf instead of t.Errorf),
+>    unchecked os.WriteFile/os.Chtimes/TraceDir errors in tests, classifyServer not
+>    asserting method/path. **Lesson:** Test steps in the plan should specify: no real
+>    clocks (channel or context), no goroutine leaks (t.Cleanup), all test-setup errors
+>    checked (t.Fatalf), assertions use t.Errorf not t.Logf.
+>
+> 4. **Defensive validation (10 threads)** — ValidateURL skipping all validation when
+>    AllowRemote=true, negative timeout accepted, ReadTrace not verifying embedded
+>    tool_use_id matches filename, response body leak on non-nil response + non-nil error,
+>    CleanupOrphans deleting non-trace files, port validation, maxAge<=0 guard.
+>    Of these, 4 were fixed and 6 were pushed back (unreachable code paths, marginal
+>    value additions). **Lesson:** "Validate at boundaries" is good, but Copilot
+>    over-indexes on hypothetical inputs. The plan should specify which validations are
+>    required and which are explicitly out of scope, so pushbacks are pre-documented.
+>
+> **Key bugs caught by review (would have been production issues):**
+> - Chmod through symlink in TraceDir (attacker changes permissions on unintended target)
+> - Orphan trace files from nil FeedbackToken (guaranteed feedback failure + accumulation)
+> - HandlePreToolUse errors written to io.Discard (invisible hook failures in production)
+> - Empty tool_name silently allowed instead of fail-closed exit 2
+> - Response body leak in doPostWithRetry on transport/proxy failures
+>
+> **Trend:** M1:84 → M2:61 → M3:28 → M4:91 → M5:100 → M6:34. Confirms that thread
+> count correlates with scope. M6's smaller scope + thorough panel review returned the
+> count to the M3 range. The panel's 10 pre-implementation findings prevented an
+> estimated 15-20 additional review threads. Pushback rate increased in later rounds
+> (rounds 8-10 were all pushbacks) — Copilot reaches diminishing returns after ~6 rounds.
+>
+> **Cross-milestone lesson integration for M7:**
+> - M1: Underspecified design → long review tails. M7 plan must specify OTel span names,
+>   attribute types, and metric cardinality upfront.
+> - M2: Test infrastructure drives threads. M7 tests need mock exporters, not real OTLP.
+> - M5: Config defaults need explicit *bool/*int decisions. TelemetryConfig already uses
+>   plain bool — verify this is correct (enabled=false is the zero value, which is fine).
+> - M6: Error visibility. Every telemetry function that can fail needs explicit error
+>   handling disposition in the plan. No-op telemetry must truly no-op (no panics, no
+>   allocations on the hot path).
+
 ### Task 6.1: Trace file management
 
 > Independent utility — no HTTP, no stdin parsing. Can be tested in isolation.
