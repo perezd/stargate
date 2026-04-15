@@ -2323,7 +2323,7 @@ stargate.feedback                          [new trace, linked to original]
 
 When the original trace ID cannot be resolved (TTLMap expired AND trace file missing), the feedback span is emitted without a Link, the `stargate_feedback_total{outcome="trace_not_found"}` counter is incremented, and an error is logged to stderr. The corpus still records the user approval — only trace correlation is lost.
 
-**Sampling:** Configured via `telemetry.sample_rate` (`*float64`, default 1.0 = 100%). Uses OTel's `ParentBased(TraceIDRatioBased(cfg.SampleRate))` for classification traces. **Feedback spans are always sampled** regardless of the global rate — feedback is low-volume and high-value for debugging false positives. Metrics and logs are unaffected by trace sampling — they always record.
+**Sampling:** All traces are always sampled (`AlwaysSample`). Stargate is a localhost classifier with low request volume — sampling complexity is not justified. If volume becomes a concern in the future, a `sample_rate` config field can be added.
 
 ### 9.5 No-Op Behavior
 
@@ -2337,8 +2337,8 @@ When `telemetry.enabled = false` (the default), the `Telemetry` struct must be a
 - Compile-time interface assertion: `var _ Telemetry = (*NoOpTelemetry)(nil)`
 
 **Error handling policy:**
-- `Init` returns error on misconfiguration (bad endpoint, invalid protocol, SampleRate outside 0.0–1.0). Caller decides whether to fail hard or fall back to no-op.
-- `Shutdown` flushes providers sequentially: TracerProvider → MeterProvider → LoggerProvider → TTLMap.Close(). The same parent context is passed to each provider's Shutdown sequentially — natural deadline pressure ensures all providers attempt flushing. Errors are joined via `errors.Join` (not short-circuited). Returns the joined error but callers should log and continue (best-effort).
+- `Init` returns error on misconfiguration (bad endpoint, invalid protocol). Logs a warning when `http://` endpoint is used with credentials set (plaintext credential risk). Caller decides whether to fail hard or fall back to no-op.
+- `Shutdown` flushes sequentially: TracerProvider → TTLMap.Close() → MeterProvider → LoggerProvider. TracerProvider goes first so in-flight feedback spans can still query the TTLMap. TTLMap closes after traces are flushed but before metrics/logs. The same parent context is passed to each sequentially — natural deadline pressure. Errors are joined via `errors.Join` (not short-circuited). Returns the joined error but callers should log and continue (best-effort).
 - Metric/log/span recording methods never return errors — OTel SDK handles export failures internally via batch processors
 - If `export_logs`, `export_metrics`, or `export_traces` is false, the corresponding provider is not created (saves resources), but the recording methods still no-op gracefully
 
@@ -2349,7 +2349,7 @@ When `telemetry.enabled = false` (the default), the `Telemetry` struct must be a
 - LLM prompt/response content is never included in spans or logs — only the decision and latency
 - `stargate_trace_id` is safe to export (OTel TraceID, no command content)
 - Feedback tokens are never included in telemetry attributes
-- `TelemetryConfig.Password` must implement a `String()` method that returns `[REDACTED]` to prevent accidental exposure via `fmt.Sprintf("%+v", cfg)` or debug logging. The raw value is only used internally by the OTLP exporter auth configuration.
+- `TelemetryConfig.Password` uses a `RedactedString` custom type (`type RedactedString string`) with `func (r RedactedString) String() string { return "[REDACTED]" }`. This protects against accidental exposure via `fmt.Sprintf("%+v", parentConfig)` — Go's `%v` formatter calls `String()` on the field type, not just the parent struct. The raw value is accessed via `string(cfg.Password)` internally for OTLP exporter auth configuration.
 
 ### 9.6 Environment Variable Overrides
 

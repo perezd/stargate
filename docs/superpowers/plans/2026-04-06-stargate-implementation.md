@@ -2463,7 +2463,7 @@ Goal: OTel SDK init, structured logs, metrics, traces, Grafana Cloud export. No-
 > **Panel design decisions (2 rounds, 8 experts):**
 > - `stargate_trace_id` = OTel TraceID (not a separate identifier)
 > - Feedback spans use `trace.Link` to original trace (not parent-child)
-> - Feedback spans always sampled (independent of global sample_rate)
+> - All traces always sampled (AlwaysSample) — no per-span sampling complexity
 > - Feedback span sets `stargate.trace_id` attribute for Tempo search
 > - Feedback with unresolvable trace_id: emit span without Link, increment `trace_not_found`
 > - Metric instrument names use underscores; span/log attributes use dots
@@ -2472,9 +2472,11 @@ Goal: OTel SDK init, structured logs, metrics, traces, Grafana Cloud export. No-
 > - `include_scrubbed_command` (bool, default false) gates `stargate.scrubbed_command` and `stargate.request_cwd`
 > - `stargate.request_cwd` is the per-request CWD from ClassifyRequest, not server startup CWD
 > - `stargate.scope.resolved` always included, truncated to 256 bytes; resolver contract: no secrets
-> - `TelemetryConfig.Password` has `String()` → `[REDACTED]`
-> - `SampleRate` uses `*float64` (nil=default 1.0, explicit 0.0=no traces). Validated 0.0–1.0.
-> - Shutdown order: Tracer → Meter → Logger → TTLMap.Close(), same parent ctx, errors joined
+> - `TelemetryConfig.Password` uses `RedactedString` custom type (protects against parent struct %+v)
+> - TTLMap created with `context.Background()`; sweep termination via `Close()` only
+> - `http://` endpoint with credentials set: log warning (not blocked — dev setups use local collectors)
+> - All traces always sampled (AlwaysSample). No SampleRate config — complexity not justified for localhost.
+> - Shutdown order: Tracer → TTLMap.Close() → Meter → Logger, same parent ctx, errors joined
 > - In-memory `tool_use_id→trace_id` map: `ttlmap.TTLMap` (10min TTL, 10k cap)
 > - Span error status on all failure paths (see spec §9.4 for full list)
 > - Env var overrides log warning at startup (accepted risk for trust boundary)
@@ -2496,11 +2498,10 @@ Goal: OTel SDK init, structured logs, metrics, traces, Grafana Cloud export. No-
 
 - [ ] **Step 1: Update TelemetryConfig**
 
-Add fields to `TelemetryConfig`:
-- `IncludeScrubCommand bool      toml:"include_scrubbed_command"` (default false)
-- `SampleRate          *float64  toml:"sample_rate"` (nil=default 1.0, explicit 0.0=no traces, validated 0.0–1.0)
-
-Add `String()` method to `TelemetryConfig` that redacts `Password` to `[REDACTED]`.
+Add to config.go:
+- `type RedactedString string` with `func (r RedactedString) String() string { return "[REDACTED]" }`
+- Change `TelemetryConfig.Password` from `string` to `RedactedString`
+- Add `IncludeScrubCommand bool toml:"include_scrubbed_command"` (default false) to `TelemetryConfig`
 
 - [ ] **Step 2: Define Telemetry interface and no-op implementation**
 
@@ -2534,12 +2535,14 @@ NoOpTelemetry: all methods are no-ops, no goroutines, no allocations. `StartSpan
 `Init(cfg config.TelemetryConfig) (Telemetry, error)`:
 - If `!cfg.Enabled`, return `&NoOpTelemetry{}`.
 - Create OTLP/HTTP exporters with auth (Username/Password).
-- Configure `ParentBased(TraceIDRatioBased(cfg.SampleRate))` sampler.
+- Configure `AlwaysSample` sampler (no sampling complexity for localhost).
 - Create providers only for enabled signals (`export_logs`, `export_metrics`, `export_traces`).
 - Log warning if any `STARGATE_OTEL_*` env var overrides are active.
+- Log warning if endpoint is `http://` with credentials set (plaintext risk).
 
 `Shutdown(ctx context.Context) error`:
-- Sequential: TracerProvider.Shutdown → MeterProvider.Shutdown → LoggerProvider.Shutdown → TTLMap.Close().
+- Sequential: TracerProvider.Shutdown → TTLMap.Close() → MeterProvider.Shutdown → LoggerProvider.Shutdown.
+- TracerProvider first so in-flight feedback spans can still query TTLMap. TTLMap closes after traces flushed.
 - Same parent context passed to each sequentially (natural deadline pressure). Errors joined via `errors.Join`, not short-circuited.
 
 - [ ] **Step 4: Write tests**
@@ -2548,11 +2551,13 @@ Test (use in-memory exporters, not real OTLP):
 - `Init` with `Enabled=false` → returns NoOpTelemetry
 - `Init` with `Enabled=true` → returns LiveTelemetry
 - NoOpTelemetry methods don't panic, don't allocate (benchmark)
-- `Shutdown` calls all providers even if first one errors
-- `SampleRate` validation (0.0–1.0 range, reject negative/>1.0)
-- `String()` on TelemetryConfig redacts password
+- `Shutdown` calls all providers even if first one errors (Tracer → TTLMap → Meter → Logger)
+- `RedactedString` type: `fmt.Sprintf("%v", cfg.Password)` returns `[REDACTED]`
+- `RedactedString` type: `fmt.Sprintf("%+v", parentConfig)` does not expose password
 - Env var override warning logged when active
+- HTTP endpoint with credentials: warning logged
 - Error dispositions: Init returns error, Shutdown joins errors, recording methods never error
+- TTLMap created with `context.Background()`, closed in Shutdown
 
 - [ ] **Step 5: Commit**
 
@@ -2655,11 +2660,11 @@ git commit -m "feat(telemetry): structured OTel log records with attribute gatin
 
 - [ ] **Step 2: Implement feedback span with Link**
 
-When feedback arrives, create a new root span `stargate.feedback` using an **AlwaysSample** tracer (feedback is always sampled regardless of global sample_rate). Set `trace.Link` to the original trace and `attribute.String("stargate.trace_id", originalTraceID)` for Tempo search. When the original trace ID cannot be resolved (TTLMap miss AND trace file missing), emit the span without a Link and increment `stargate_feedback_total{outcome="trace_not_found"}`.
+When feedback arrives, create a new root span `stargate.feedback`. Set `trace.Link` to the original trace and `attribute.String("stargate.trace_id", originalTraceID)` for Tempo search. When the original trace ID cannot be resolved (TTLMap miss AND trace file missing), emit the span without a Link and increment `stargate_feedback_total{outcome="trace_not_found"}`. Log to stderr.
 
 - [ ] **Step 3: Implement in-memory tool_use_id → trace_id map**
 
-`ttlmap.TTLMap[string, string]` with 10-minute TTL, 10,000 max entries. Populated in classify path, queried in feedback path. Map miss falls through to adapter trace file. **Lifecycle:** owned by `LiveTelemetry`, closed in `Shutdown` after OTel providers (see Task 7.1 Step 3).
+`ttlmap.New[string, string](context.Background(), 10*time.Minute, 10_000)` — 10-minute TTL, 10,000 max entries. Uses `context.Background()` so the sweep goroutine runs until `Close()` is called (not tied to a cancellable context). Populated in classify path, queried in feedback path. Map miss falls through to adapter trace file. **Lifecycle:** owned by `LiveTelemetry`, closed in `Shutdown` after TracerProvider but before MeterProvider (see Task 7.1 Step 3).
 
 - [ ] **Step 4: Write tests**
 
@@ -2669,8 +2674,7 @@ Test with in-memory span exporter:
 - Error spans have `codes.Error` status set (test each error path from §9.4)
 - Feedback span has Link to original TraceID (not parent-child)
 - Feedback span has `stargate.trace_id` attribute set
-- Feedback span is always sampled even when global SampleRate is 0.0
-- Feedback with unresolvable trace_id: span emitted without Link, no error
+- Feedback with unresolvable trace_id: span emitted without Link, no error, logged to stderr
 - tool_use_id map populated on classify, queried on feedback
 - Map miss returns empty, doesn't error
 
