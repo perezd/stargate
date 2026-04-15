@@ -65,7 +65,7 @@ func handleHook(args []string, _ string, verbose bool) int {
 
 	switch event {
 	case "pre-tool-use":
-		return adapter.HandlePreToolUse(ctx, os.Stdin, os.Stdout, cfg)
+		return adapter.HandlePreToolUse(ctx, os.Stdin, os.Stdout, os.Stderr, cfg)
 	case "post-tool-use":
 		return adapter.HandlePostToolUse(ctx, os.Stdin, os.Stderr, cfg)
 	default:

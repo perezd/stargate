@@ -59,18 +59,23 @@ func TraceDir() (string, error) {
 		return "", fmt.Errorf("creating trace directory %q: %w", dir, err)
 	}
 
-	// Explicitly set permissions in case directory already existed with wrong perms.
-	if err := os.Chmod(dir, 0700); err != nil {
-		return "", fmt.Errorf("setting trace directory permissions on %q: %w", dir, err)
-	}
-
-	// Verify via Lstat that the result is a real directory (not a symlink).
+	// Verify via Lstat that the result is a real directory (not a symlink)
+	// BEFORE chmod, which follows symlinks and could change permissions
+	// on an unintended target.
 	info, err := os.Lstat(dir)
 	if err != nil {
 		return "", fmt.Errorf("verifying trace directory %q: %w", dir, err)
 	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("trace directory path %q must not be a symlink", dir)
+	}
 	if !info.IsDir() {
 		return "", fmt.Errorf("trace directory path %q exists but is not a directory", dir)
+	}
+
+	// Explicitly set permissions in case directory already existed with wrong perms.
+	if err := os.Chmod(dir, 0700); err != nil {
+		return "", fmt.Errorf("setting trace directory permissions on %q: %w", dir, err)
 	}
 
 	return dir, nil
@@ -90,6 +95,11 @@ func WriteTrace(dir string, data TraceData) error {
 		return fmt.Errorf("opening trace file %q: %w", path, err)
 	}
 	defer f.Close()
+
+	// Enforce 0600 even if the file already existed with looser permissions.
+	if err := f.Chmod(0600); err != nil {
+		return fmt.Errorf("setting trace file permissions on %q: %w", path, err)
+	}
 
 	enc := json.NewEncoder(f)
 	enc.SetIndent("", "  ")

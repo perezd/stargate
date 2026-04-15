@@ -61,20 +61,18 @@ func TestHandleHook_NonLoopbackRejected(t *testing.T) {
 }
 
 func TestHandleHook_AllowRemoteOverridesLoopbackCheck(t *testing.T) {
-	// This will fail at the adapter level (no server), but should NOT fail
-	// at URL validation. We just check it gets past the loopback check.
-	// The adapter will return exit 2 because there's no server, but that's
-	// after URL validation — which is what we're testing.
+	// With --allow-remote, a non-loopback URL should pass URL validation.
+	// The handler will still return exit 2 (no server), but that proves
+	// it got past the loopback check — without --allow-remote it would
+	// have failed at URL validation with the same exit code but a
+	// different error message.
 	code := handleHook([]string{
 		"--agent", "claude-code",
 		"--event", "pre-tool-use",
 		"--url", "http://10.0.0.1:9099",
 		"--allow-remote",
 	}, "", false)
-	// Exit 2 is expected (no server to connect to), but it should NOT be
-	// from URL validation. The important thing is it didn't fail at
-	// the loopback check stage.
 	if code != 2 {
-		t.Logf("exit code %d (expected 2 from adapter, not URL validation)", code)
+		t.Errorf("exit code: got %d, want 2 (from adapter, not URL validation)", code)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -52,7 +53,7 @@ func TestHandlePreToolUse_NonBashAllowsImmediately(t *testing.T) {
 	var stdout bytes.Buffer
 
 	cfg := adapter.ClientConfig{URL: "http://127.0.0.1:0", Timeout: 1 * time.Second}
-	code := adapter.HandlePreToolUse(context.Background(), stdin, &stdout, cfg)
+	code := adapter.HandlePreToolUse(context.Background(), stdin, &stdout, io.Discard, cfg)
 	if code != 0 {
 		t.Fatalf("exit code: got %d, want 0", code)
 	}
@@ -81,7 +82,7 @@ func TestHandlePreToolUse_BashAllow(t *testing.T) {
 	var stdout bytes.Buffer
 	cfg := adapter.ClientConfig{URL: srv.URL, Timeout: 5 * time.Second}
 
-	code := adapter.HandlePreToolUse(context.Background(), stdin, &stdout, cfg)
+	code := adapter.HandlePreToolUse(context.Background(), stdin, &stdout, io.Discard, cfg)
 	if code != 0 {
 		t.Fatalf("exit code: got %d, want 0", code)
 	}
@@ -108,7 +109,7 @@ func TestHandlePreToolUse_BashReviewMapsToAsk(t *testing.T) {
 	var stdout bytes.Buffer
 	cfg := adapter.ClientConfig{URL: srv.URL, Timeout: 5 * time.Second}
 
-	code := adapter.HandlePreToolUse(context.Background(), stdin, &stdout, cfg)
+	code := adapter.HandlePreToolUse(context.Background(), stdin, &stdout, io.Discard, cfg)
 	if code != 0 {
 		t.Fatalf("exit code: got %d, want 0", code)
 	}
@@ -132,7 +133,7 @@ func TestHandlePreToolUse_BashBlockMapsToDeny(t *testing.T) {
 	var stdout bytes.Buffer
 	cfg := adapter.ClientConfig{URL: srv.URL, Timeout: 5 * time.Second}
 
-	code := adapter.HandlePreToolUse(context.Background(), stdin, &stdout, cfg)
+	code := adapter.HandlePreToolUse(context.Background(), stdin, &stdout, io.Discard, cfg)
 	if code != 0 {
 		t.Fatalf("exit code: got %d, want 0", code)
 	}
@@ -156,7 +157,7 @@ func TestHandlePreToolUse_UnknownActionDeniesFailClosed(t *testing.T) {
 	var stdout bytes.Buffer
 	cfg := adapter.ClientConfig{URL: srv.URL, Timeout: 5 * time.Second}
 
-	code := adapter.HandlePreToolUse(context.Background(), stdin, &stdout, cfg)
+	code := adapter.HandlePreToolUse(context.Background(), stdin, &stdout, io.Discard, cfg)
 	if code != 0 {
 		t.Fatalf("exit code: got %d, want 0", code)
 	}
@@ -181,7 +182,7 @@ func TestHandlePreToolUse_GuidanceInSystemMessage(t *testing.T) {
 	var stdout bytes.Buffer
 	cfg := adapter.ClientConfig{URL: srv.URL, Timeout: 5 * time.Second}
 
-	code := adapter.HandlePreToolUse(context.Background(), stdin, &stdout, cfg)
+	code := adapter.HandlePreToolUse(context.Background(), stdin, &stdout, io.Discard, cfg)
 	if code != 0 {
 		t.Fatalf("exit code: got %d, want 0", code)
 	}
@@ -198,7 +199,7 @@ func TestHandlePreToolUse_MalformedStdin(t *testing.T) {
 	var stdout bytes.Buffer
 	cfg := adapter.ClientConfig{URL: "http://127.0.0.1:0", Timeout: 1 * time.Second}
 
-	code := adapter.HandlePreToolUse(context.Background(), stdin, &stdout, cfg)
+	code := adapter.HandlePreToolUse(context.Background(), stdin, &stdout, io.Discard, cfg)
 	if code != 2 {
 		t.Errorf("exit code: got %d, want 2 for malformed stdin", code)
 	}
@@ -209,7 +210,7 @@ func TestHandlePreToolUse_EmptyStdin(t *testing.T) {
 	var stdout bytes.Buffer
 	cfg := adapter.ClientConfig{URL: "http://127.0.0.1:0", Timeout: 1 * time.Second}
 
-	code := adapter.HandlePreToolUse(context.Background(), stdin, &stdout, cfg)
+	code := adapter.HandlePreToolUse(context.Background(), stdin, &stdout, io.Discard, cfg)
 	if code != 2 {
 		t.Errorf("exit code: got %d, want 2 for empty stdin", code)
 	}
@@ -222,7 +223,7 @@ func TestHandlePreToolUse_StdinExceeds1MB(t *testing.T) {
 	var stdout bytes.Buffer
 	cfg := adapter.ClientConfig{URL: "http://127.0.0.1:0", Timeout: 1 * time.Second}
 
-	code := adapter.HandlePreToolUse(context.Background(), stdin, &stdout, cfg)
+	code := adapter.HandlePreToolUse(context.Background(), stdin, &stdout, io.Discard, cfg)
 	if code != 2 {
 		t.Errorf("exit code: got %d, want 2 for oversized stdin", code)
 	}
@@ -242,7 +243,7 @@ func TestHandlePreToolUse_MissingCommand(t *testing.T) {
 	var stdout bytes.Buffer
 	cfg := adapter.ClientConfig{URL: "http://127.0.0.1:0", Timeout: 1 * time.Second}
 
-	code := adapter.HandlePreToolUse(context.Background(), stdin, &stdout, cfg)
+	code := adapter.HandlePreToolUse(context.Background(), stdin, &stdout, io.Discard, cfg)
 	if code != 2 {
 		t.Errorf("exit code: got %d, want 2 for empty command", code)
 	}
@@ -254,7 +255,7 @@ func TestHandlePreToolUse_InvalidToolUseID(t *testing.T) {
 	var stdout bytes.Buffer
 	cfg := adapter.ClientConfig{URL: "http://127.0.0.1:0", Timeout: 1 * time.Second}
 
-	code := adapter.HandlePreToolUse(context.Background(), stdin, &stdout, cfg)
+	code := adapter.HandlePreToolUse(context.Background(), stdin, &stdout, io.Discard, cfg)
 	if code != 2 {
 		t.Errorf("exit code: got %d, want 2 for invalid tool_use_id", code)
 	}
@@ -266,7 +267,7 @@ func TestHandlePreToolUse_ServerUnreachable(t *testing.T) {
 	// Point at a port that's definitely not listening.
 	cfg := adapter.ClientConfig{URL: "http://127.0.0.1:1", Timeout: 500 * time.Millisecond}
 
-	code := adapter.HandlePreToolUse(context.Background(), stdin, &stdout, cfg)
+	code := adapter.HandlePreToolUse(context.Background(), stdin, &stdout, io.Discard, cfg)
 	if code != 2 {
 		t.Errorf("exit code: got %d, want 2 for unreachable server", code)
 	}
@@ -287,7 +288,7 @@ func TestHandlePreToolUse_TraceFileWritten(t *testing.T) {
 	var stdout bytes.Buffer
 	cfg := adapter.ClientConfig{URL: srv.URL, Timeout: 5 * time.Second}
 
-	code := adapter.HandlePreToolUse(context.Background(), stdin, &stdout, cfg)
+	code := adapter.HandlePreToolUse(context.Background(), stdin, &stdout, io.Discard, cfg)
 	if code != 0 {
 		t.Fatalf("exit code: got %d, want 0", code)
 	}
@@ -395,7 +396,9 @@ func TestHandlePostToolUse_CorruptedTrace(t *testing.T) {
 	}
 	toolUseID := "toolu_corrupt"
 	path := dir + "/" + toolUseID + ".json"
-	os.WriteFile(path, []byte("{not json"), 0600)
+	if err := os.WriteFile(path, []byte("{not json"), 0600); err != nil {
+		t.Fatalf("WriteFile(%q): %v", path, err)
+	}
 	t.Cleanup(func() { os.Remove(path) })
 
 	srv := feedbackServer(t, http.StatusOK)

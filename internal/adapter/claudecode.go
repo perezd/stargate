@@ -77,6 +77,12 @@ func HandlePostToolUse(ctx context.Context, stdin io.Reader, stderr io.Writer, c
 		return 0
 	}
 
+	// No feedback token means feedback would fail; clean up and exit.
+	if trace.FeedbackToken == "" {
+		_ = DeleteTrace(dir, input.ToolUseID)
+		return 0
+	}
+
 	// Send feedback to stargate server.
 	feedbackReq := FeedbackRequest{
 		StargateTrID:  trace.StargateTrID,
@@ -126,14 +132,14 @@ func parsePostToolUseInput(stdin io.Reader) (*postToolUseInput, error) {
 // classifies the command via the stargate server, and writes the hook
 // response to stdout. Stores trace data for post-tool-use correlation.
 // Returns exit code: 0 for valid hook responses, 2 for fatal errors.
-func HandlePreToolUse(ctx context.Context, stdin io.Reader, stdout io.Writer, cfg ClientConfig) int {
+func HandlePreToolUse(ctx context.Context, stdin io.Reader, stdout io.Writer, stderr io.Writer, cfg ClientConfig) int {
 	// Run orphan cleanup best-effort before classification.
 	cleanupOrphansBestEffort()
 
 	// Read and parse stdin.
 	input, err := parsePreToolUseInput(stdin)
 	if err != nil {
-		fmt.Fprintf(io.Discard, "adapter: %v\n", err) // stderr wired by caller
+		fmt.Fprintf(stderr, "adapter: %v\n", err)
 		return 2
 	}
 
@@ -145,14 +151,17 @@ func HandlePreToolUse(ctx context.Context, stdin io.Reader, stdout io.Writer, cf
 	// Extract command from tool_input.
 	var toolInput bashToolInput
 	if err := json.Unmarshal(input.ToolInput, &toolInput); err != nil {
+		fmt.Fprintf(stderr, "adapter: parsing tool_input: %v\n", err)
 		return 2
 	}
 	if toolInput.Command == "" {
+		fmt.Fprintf(stderr, "adapter: tool_input.command is empty\n")
 		return 2
 	}
 
 	// Validate tool_use_id before any filesystem operation.
 	if err := ValidateToolUseID(input.ToolUseID); err != nil {
+		fmt.Fprintf(stderr, "adapter: %v\n", err)
 		return 2
 	}
 
@@ -168,6 +177,7 @@ func HandlePreToolUse(ctx context.Context, stdin io.Reader, stdout io.Writer, cf
 
 	resp, err := Classify(ctx, cfg, classifyReq)
 	if err != nil {
+		fmt.Fprintf(stderr, "adapter: classify: %v\n", err)
 		return 2
 	}
 
@@ -205,20 +215,21 @@ func parsePreToolUseInput(stdin io.Reader) (*preToolUseInput, error) {
 }
 
 // storeTrace writes the trace file for post-tool-use correlation.
+// Skips writing when there's no feedback token — without a token,
+// post-tool-use feedback would always fail, creating guaranteed orphans.
 func storeTrace(toolUseID string, resp *ClassifyResponse) error {
+	if resp.FeedbackToken == nil || *resp.FeedbackToken == "" {
+		return nil
+	}
+
 	dir, err := TraceDir()
 	if err != nil {
 		return err
 	}
 
-	token := ""
-	if resp.FeedbackToken != nil {
-		token = *resp.FeedbackToken
-	}
-
 	return WriteTrace(dir, TraceData{
 		StargateTrID:  resp.StargateTrID,
-		FeedbackToken: token,
+		FeedbackToken: *resp.FeedbackToken,
 		ToolUseID:     toolUseID,
 	})
 }
