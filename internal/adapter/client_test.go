@@ -121,15 +121,16 @@ func TestClassify_MalformedJSON(t *testing.T) {
 }
 
 func TestClassify_Timeout(t *testing.T) {
+	// Handler blocks on a channel instead of sleeping a fixed duration.
+	// The channel is closed before srv.Close() so the handler unblocks
+	// immediately, keeping test execution fast.
+	done := make(chan struct{})
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Block until the client times out.
-		select {
-		case <-r.Context().Done():
-		case <-time.After(10 * time.Second):
-		}
-		w.WriteHeader(http.StatusOK)
+		<-done
 	}))
 	defer srv.Close()
+	defer close(done) // unblock handler before srv.Close() waits for connections
 
 	cfg := adapter.ClientConfig{
 		URL:     srv.URL,
@@ -334,15 +335,3 @@ func TestValidateURL_AllowRemote(t *testing.T) {
 	}
 }
 
-// itoa is a minimal int-to-string helper for the raw HTTP response builder.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	buf := make([]byte, 0, 10)
-	for n > 0 {
-		buf = append([]byte{byte('0' + n%10)}, buf...)
-		n /= 10
-	}
-	return string(buf)
-}
