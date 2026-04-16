@@ -2802,11 +2802,35 @@ Goal: `/test` dry-run endpoint, `stargate test` CLI, evasion test corpus.
 > localhost process that restarts in milliseconds. POST /reload route and SIGHUP handler
 > removed. Config changes require server restart.
 >
-> **Cross-milestone lessons applied:**
-> - M1: Explicit test matrices for every task
-> - M6: All error paths log to stderr
-> - M7: Comment/code accuracy — pre-document design decisions inline
-> - M7: Pre-document pushback-worthy decisions to prevent Copilot cycles
+> **Cross-milestone lessons applied (M1–M7):**
+>
+> From M1 (84 threads): Underspecified design → long review tails. M8 test matrices
+> specify exact assertions (CommandInfo fields, not just classification label).
+>
+> From M2 (61 threads): Boundary edge cases (null vs empty, 0-based vs 1-based).
+> /test DryRun field must use json:"-" tag — verify HTTP input doesn't set it.
+>
+> From M3 (28 threads): Ownership boundaries. /test handler owns DryRun=true
+> injection — the classifier doesn't know it's a dry run until it sees the field.
+>
+> From M4 (91 threads): Prompt construction is security-critical. Evasion tests
+> must verify the *resolved* CommandInfo (Name field), not just the raw input.
+>
+> From M5 (100 threads): Concurrency safety. /test shares the same LLM rate-limit
+> budget as /classify (not a separate pool). Comment this explicitly.
+> Config defaults: DryRun=false by zero value — no pointer needed.
+> API contract: /test response schema must be identical to /classify.
+>
+> From M6 (34 threads): Error visibility. Every error path in test CLI logs to stderr.
+> Security ordering: evasion tests verify parse→walk→rule resolution order.
+> Test quality: no real clocks, use t.Cleanup, check all setup errors.
+>
+> From M7 (41 threads): Comment accuracy — document DryRun=true behavior inline
+> at the exact code location. Pre-document pushback-worthy decisions (e.g.,
+> "DryRun on ClassifyRequest is intentional — json:\"-\" prevents HTTP injection").
+> OTel: /test spans include stargate.dry_run=true attribute. Tests use minimal
+> fixtures (don't init full telemetry for classifier-only tests).
+> Nil safety: check all map accesses introduced during wiring.
 
 ### Task 8.1: POST /test dry-run endpoint
 

@@ -1621,7 +1621,12 @@ Dry-run alias for `/classify`. Same request schema, same response schema. Intend
 - Does **not** update the command cache.
 - Does **not** generate a feedback token (FeedbackToken is always nil).
 - `ast` field is always populated in the response regardless of config settings.
-- Telemetry: emits spans and metrics normally (so operators can see test traffic in dashboards), but corpus write metrics are not incremented.
+- Telemetry: emits spans and metrics normally (so operators can see test traffic in dashboards), but all spans include `stargate.dry_run=true` attribute so operators can filter test traffic. Corpus write metrics are not incremented.
+- LLM review: still invoked if rules return YELLOW. Shares the same rate-limit budget as `/classify` — not a separate pool.
+
+**Implementation:** The `ClassifyRequest` struct has a `DryRun bool` field tagged `json:"-"` (not accepted from HTTP JSON input). The `/test` handler sets `DryRun=true` before calling `Classify`. The classifier checks this field to skip corpus writes, cache updates, and feedback token generation. This keeps the classification logic in a single code path.
+
+**Security note:** `/test` provides a classification oracle — an attacker on localhost can probe rule boundaries without leaving corpus entries. This is an accepted trade-off: the telemetry span trail (with `dry_run=true`) captures all probing activity, and localhost access is already the trust boundary.
 
 ---
 
