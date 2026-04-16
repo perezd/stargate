@@ -282,6 +282,11 @@ func parseTestFlags(args []string) (*testFlags, error) {
 			f.offline = true
 
 		case arg == "-":
+			// Stdin sentinel must be the last argument — any trailing args
+			// would be silently dropped when stdin overwrites f.command.
+			if i+1 < len(args) {
+				return nil, fmt.Errorf("'-' (stdin) must be the last argument; got extra: %v", args[i+1:])
+			}
 			f.readStdin = true
 
 		default:

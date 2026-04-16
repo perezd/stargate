@@ -45,6 +45,15 @@ func TestParseTestFlags_StdinSentinel(t *testing.T) {
 	}
 }
 
+func TestParseTestFlags_StdinSentinelRejectsTrailingArgs(t *testing.T) {
+	// `stargate test - ls` should error — positional args after - would be
+	// silently dropped when stdin overwrites f.command.
+	_, err := parseTestFlags([]string{"-", "ls"})
+	if err == nil {
+		t.Error("expected error for args after '-' sentinel")
+	}
+}
+
 func TestParseTestFlags_CWD(t *testing.T) {
 	f, err := parseTestFlags([]string{"--cwd", "/tmp", "ls"})
 	if err != nil {
