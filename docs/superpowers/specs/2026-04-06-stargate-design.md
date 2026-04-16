@@ -1612,9 +1612,37 @@ All exit-2 paths are fail-closed.
 
 Hot-reload the TOML config without restarting the server. Also triggered by `SIGHUP`.
 
+**Reload semantics:**
+1. Load the config file from the original path (resolved at startup).
+2. Validate the new config via `Config.Validate()`. If validation fails, keep the old config and return an error.
+3. Recompile rules via `rules.NewEngine(newCfg)`. If compilation fails, keep the old config.
+4. Atomically swap the config via `atomic.Pointer[Config].Store()`.
+5. Invalidate the command cache (rules/scopes may have changed).
+6. Record `stargate_config_reloads_total{status="success"|"failure"}` metric.
+7. Record `stargate_config_last_reload_timestamp_seconds` gauge (Unix epoch seconds, unit `"s"`).
+8. Log result to stderr: success with rule count summary, or failure with error detail.
+
+**Response:**
+- Success: `200 OK` with `{"status": "ok", "rules_loaded": {"red": N, "yellow": N, "green": N}}`
+- Validation failure: `400 Bad Request` with `{"error": "validation: ...", "status": "rejected"}`
+- Load failure: `500 Internal Server Error` with `{"error": "load: ...", "status": "failed"}`
+
+**SIGHUP behavior:** Identical to `POST /reload` but triggered by the OS signal. Success/failure logged to stderr. No HTTP response (signal handler has no client).
+
+**What is NOT reloaded:** The LLM provider (API keys are read once at startup), the corpus database path, the listen address, and the telemetry configuration. These require a full restart.
+
+**Fail-closed on reload:** If the new config is invalid, the server continues operating with the old config. Classification is never interrupted. This is a "fail-safe" reload — the worst case is stale config, not broken classification.
+
 #### `POST /test`
 
-Dry-run alias for `/classify`. Same schema, same response. Intended for rule development and debugging.
+Dry-run alias for `/classify`. Same request schema, same response schema. Intended for rule development and debugging.
+
+**Differences from `/classify`:**
+- Does **not** write to the precedent corpus (no corpus.Write call).
+- Does **not** update the command cache.
+- Does **not** generate a feedback token (FeedbackToken is always nil).
+- `ast` field is always populated in the response regardless of config settings.
+- Telemetry: emits spans and metrics normally (so operators can see test traffic in dashboards), but corpus write metrics are not incremented.
 
 ---
 

@@ -2489,6 +2489,74 @@ Goal: OTel SDK init, structured logs, metrics, traces, Grafana Cloud export. No-
 > - `ClassifyResult` type defined in telemetry package (avoids circular import with classifier)
 > - `stargate_classify_duration` → Prometheus auto-suffixes to `_ms_bucket` via unit field
 
+> **M7 Retrospective (post-implementation):** 41 threads, 11 Copilot review rounds, 1 PR.
+> Scope: 1717 lines added, 14 files, 1 new package (internal/telemetry) + config/classifier/
+> server wiring. Thread count higher than M6 (34) due to OTel SDK complexity and cross-cutting
+> wiring changes.
+>
+> **Five patterns drove the 41 threads:**
+>
+> 1. **OTel SDK API misuse (8 threads)** — WithURLPath overriding signal-specific paths
+>    (3 rounds of the same finding), WithNewRoot missing on feedback spans, endpoint
+>    path dropped by buildExportOpts, global provider lifecycle. **Lesson:** OTel SDK
+>    has non-obvious API contracts. The plan should specify exact OTel API calls (e.g.,
+>    "use WithNewRoot, do NOT use WithURLPath") rather than leaving SDK integration to
+>    implementation-time discovery. Copilot repeatedly flagged the endpoint path issue
+>    because the pushback didn't satisfy it — adding a code comment explaining the
+>    design decision would have stopped the cycle.
+>
+> 2. **Comment/doc accuracy (7 threads)** — TestMain comment wrong, SetTelemetry doc
+>    said "server and classifier" when it only sets classifier, comment referenced
+>    nonexistent tracer.go, env var override comment said "resolved in config loading"
+>    when it's not implemented yet, protocol error message didn't mention empty default,
+>    import ordering. **Lesson:** Same M5 pattern. Comments written during implementation
+>    must be verified against actual behavior before commit. Copilot is very sensitive
+>    to comment/code divergence.
+>
+> 3. **Nil safety and defensive validation (6 threads)** — SetTelemetry nil guard,
+>    req.Context nil map access, RecordClassification wrong argument, endpoint scheme
+>    case sensitivity, endpoint missing host validation, test missing for new validation.
+>    **Lesson:** Every new parameter or map access introduced during wiring needs a nil
+>    check. The plan should enumerate nil-safety requirements for cross-cutting changes.
+>
+> 4. **Test scaffolding overhead (6 threads)** — Tests initializing full OTLP exporters
+>    when only TTLMap needed, Shutdown with context.Background() blocking concerns (6
+>    instances across 3 rounds), RedactedString %#v not covered. **Lesson:** Tests should
+>    use the minimum fixture needed. When a test only needs one component of LiveTelemetry,
+>    construct it directly instead of calling Init with full config.
+>
+> 5. **Recurring pushbacks (14 threads)** — Endpoint path (3 rounds), shutdown context
+>    (6 instances), global provider restore, resource schema URL, unused metrics,
+>    otelhttp unconditional. Copilot kept re-raising the same issues after pushback.
+>    **Lesson:** Add a code comment at the exact location explaining the design decision.
+>    This stops the cycle. For M8, pre-document pushback-worthy decisions inline.
+>
+> **Key bugs caught by review (would have been production issues):**
+> - RecordClassification passed resp.Action instead of resp.Rule.Level (wrong metric label)
+> - req.Context nil map access (panic on requests without context field)
+> - StartFeedbackSpan missing WithNewRoot (feedback becomes child of caller's span)
+> - stargate.trace_id attribute set even on invalid TraceID parse
+> - UTF-8 rune split in byte truncation
+> - log.Printf inconsistency with codebase stderr convention
+>
+> **Trend:** M1:84 → M2:61 → M3:28 → M4:91 → M5:100 → M6:34 → M7:41. Thread count
+> tracks scope and SDK complexity. M7's OTel SDK integration introduced API contract
+> issues that don't exist in pure-Go code (no external SDK). Per-line density is lower
+> than M5 (41 threads / 1717 lines vs 100 threads / 4700 lines). The 4-round panel
+> review caught the major design issues (Link vs parent-child, metric naming, sampling
+> simplification, feedback always-sampled) before implementation.
+>
+> **Cross-milestone lesson integration for M8:**
+> - M1: Underspecified design → long tails. M8 tasks need explicit test matrices.
+> - M5: Config defaults collisions. M8 hot-reload needs atomic swap semantics specified.
+> - M6: Error visibility. M8 SIGHUP handler must log all error paths to stderr.
+> - M7: OTel SDK contracts. M8 wires telemetry metrics (config_reloads_total,
+>   config_last_reload_timestamp_seconds) — specify exact metric recording calls.
+> - M7: Comment accuracy. M8 plan should specify what POST /reload returns on
+>   success and failure (status codes, response bodies).
+> - M7: Recurring pushbacks. Pre-document design decisions as inline comments
+>   in code that Copilot tends to question.
+
 ### Task 7.1: OTel SDK initialization and no-op
 
 **Files:**
@@ -2731,81 +2799,171 @@ git commit -m "feat(telemetry): wire OTel into classify, feedback, and server pi
 
 Goal: Config hot-reload, graceful shutdown, /test endpoint, evasion corpus.
 
-### Task 8.1: Config hot-reload via SIGHUP
+> **Cross-milestone lessons applied:**
+> - M1: Explicit test matrices for every task (prevents underspecified review tails)
+> - M5: Atomic swap semantics for hot-reload specified upfront
+> - M6: All error paths log to stderr with actionable messages
+> - M7: Telemetry metric recording calls specified exactly (config_reloads_total, config_last_reload_timestamp_seconds)
+> - M7: Comment/code accuracy — POST /reload response schema specified in plan
+> - M7: Pre-document design decisions inline to prevent Copilot cycles
+
+### Task 8.1: Config hot-reload via SIGHUP and POST /reload
 
 **Files:**
-- Modify: `cmd/stargate/main.go`
-- Modify: `internal/server/server.go`
+- Modify: `internal/server/server.go` (add handleReload, Reload method)
+- Modify: `cmd/stargate/serve.go` (add SIGHUP handler)
+- Create: `internal/server/reload_test.go`
 
-- [ ] **Step 1: Implement SIGHUP handler**
+- [ ] **Step 1: Implement Server.Reload method**
 
-On SIGHUP: load new config, validate, compile rules, atomically swap `atomic.Pointer[Config]`. Log success/failure. Emit `stargate.config_reloads_total` metric.
-
-- [ ] **Step 2: Wire POST /reload to same logic**
-
-- [ ] **Step 3: Test, commit**
-
-```bash
-git add cmd/ internal/server/
-git commit -m "feat(server): add config hot-reload via SIGHUP and POST /reload"
+```go
+func (s *Server) Reload() error
 ```
 
-### Task 8.2: POST /test endpoint
+Reload semantics (per spec):
+1. Load config from original path (stored at server creation)
+2. Validate via `Config.Validate()` — failure keeps old config, returns error
+3. Recompile rules via `rules.NewEngine(newCfg)` — failure keeps old config
+4. Atomically swap via `s.cfg.Store(newCfg)`
+5. Invalidate command cache (call `s.clf.InvalidateCache()` or rebuild classifier)
+6. Record `stargate_config_reloads_total{status="success"}` or `{status="failure"}`
+7. Record `stargate_config_last_reload_timestamp_seconds` (Unix epoch)
+8. Log to stderr: success with rule counts, or failure with error
+
+**What is NOT reloaded** (inline comment in code to prevent Copilot cycles):
+- LLM provider (API keys read once at startup)
+- Corpus database path
+- Listen address
+- Telemetry configuration
+
+- [ ] **Step 2: Implement handleReload HTTP handler**
+
+`POST /reload` → calls `s.Reload()` → returns JSON response:
+- Success: `200 {"status": "ok", "rules_loaded": {"red": N, "yellow": N, "green": N}}`
+- Validation failure: `400 {"error": "validation: ...", "status": "rejected"}`
+- Load failure: `500 {"error": "load: ...", "status": "failed"}`
+
+- [ ] **Step 3: Wire SIGHUP in serve.go**
+
+Add `syscall.SIGHUP` to signal.Notify. On SIGHUP, call `srv.Reload()`. Log result to stderr. Do NOT exit — continue serving.
+
+- [ ] **Step 4: Write tests**
+
+Test:
+- Reload with valid new config → rules updated, metric incremented with status=success
+- Reload with invalid config → old rules preserved, error returned, status=failure
+- Reload with missing file → old rules preserved, error returned
+- POST /reload returns correct response codes and JSON schema
+- POST /reload with invalid config returns 400
+- Command cache invalidated after successful reload
+- SIGHUP handler calls Reload (test with signal in subprocess)
+- Concurrent classify during reload → no panic, consistent results
+
+- [ ] **Step 5: Commit**
+
+```bash
+git commit -m "feat(server): config hot-reload via SIGHUP and POST /reload"
+```
+
+### Task 8.2: POST /test dry-run endpoint
 
 **Files:**
-- Modify: `internal/server/server.go`
+- Modify: `internal/server/server.go` (add handleTest)
+- Modify: `internal/classifier/classifier.go` (add ClassifyDryRun or dryRun flag)
+- Create: `internal/server/test_endpoint_test.go`
 
-- [ ] **Step 1: Implement /test as dry-run alias for /classify**
+- [ ] **Step 1: Add dry-run classify path**
 
-Same request/response schema. Always populates `ast.commands` regardless of telemetry settings. Does not write to the precedent corpus.
+Options:
+- A) Add `DryRun bool` field to `ClassifyRequest`, skip corpus write + cache + feedback token when true
+- B) Add a separate `ClassifyDryRun` method that wraps `Classify` and nullifies side effects
 
-- [ ] **Step 2: Write tests for /test endpoint**
+Choose A — simpler, single code path. The `DryRun` field is internal-only (not in the HTTP request JSON).
 
-Verify `/test` returns the same JSON schema as `/classify`. Verify `ast.commands` is always populated regardless of config settings. Verify it does not write to the precedent corpus (query corpus before and after, assert no new entries).
+- [ ] **Step 2: Implement handleTest handler**
 
-- [ ] **Step 3: Run tests**
+`POST /test` → same request body as `/classify`. Sets `req.DryRun = true`. Returns same response schema. `ast` always populated. `FeedbackToken` always nil.
 
-```bash
-go test ./internal/server/ -v -run TestTestEndpoint
-```
+- [ ] **Step 3: Write tests**
+
+Test:
+- `/test` returns same JSON schema as `/classify` for identical input
+- `/test` response always includes `ast` field (non-nil)
+- `/test` response has `feedback_token: null`
+- Corpus has no new entries after `/test` (count before and after)
+- Command cache not updated after `/test`
+- Telemetry spans emitted for `/test` (verify span exists, no corpus write span)
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add internal/server/
 git commit -m "feat(server): add POST /test dry-run endpoint"
 ```
 
 ### Task 8.3: `stargate test` CLI subcommand
 
 **Files:**
-- Modify: `cmd/stargate/main.go`
+- Modify: `cmd/stargate/test.go` (replace stub)
+- Create: `cmd/stargate/test_test.go`
 
-- [ ] **Step 1: Implement `stargate test` subcommand**
+- [ ] **Step 1: Implement test subcommand**
 
-Accepts a command string as argument, POSTs to `/test` (or classifies directly if no server running), prints human-readable output (default) or full JSON (`--json`). Supports `--cwd` and stdin (`-`).
+Parse flags: `--cwd`, `--json`, `--url`, `--timeout`. Accept command as positional arg or from stdin (`-`).
 
-- [ ] **Step 2: Test, commit**
+Two modes:
+- **Server mode** (default): POST to `<url>/test` with the command. Requires running server.
+- **Offline mode** (`--offline`): Load config, create a Classifier directly, call ClassifyDryRun. No server needed.
+
+Default output: human-readable one-liner (decision, action, reason, matched rule).
+`--json` output: full ClassifyResponse JSON (indented).
+
+- [ ] **Step 2: Write tests**
+
+Test:
+- Positional arg → command extracted
+- Stdin (`-`) → command read from stdin
+- `--json` → full JSON output, valid JSON parse
+- `--cwd` → CWD passed in request
+- Server mode → POST to /test (use httptest.Server)
+- Missing command → error with usage hint
+- `--url` flag → custom server URL
+
+- [ ] **Step 3: Commit**
 
 ```bash
-git add cmd/
-git commit -m "feat: add stargate test CLI subcommand"
+git commit -m "feat: implement stargate test CLI subcommand"
 ```
 
 ### Task 8.4: Evasion test corpus expansion
 
 **Files:**
-- Modify: `testdata/evasion_commands.txt`
-- Modify: `internal/classifier/corpus_test.go`
+- Create or modify: `internal/classifier/evasion_test.go`
 
-- [ ] **Step 1: Expand evasion corpus**
+- [ ] **Step 1: Expand evasion test matrix**
 
-Add all vectors from spec §10.1: backslash escaping, quoting, command/env prefix, brace expansion, hex/octal escaping, variable indirection, command substitution, nested prefixes (sudo env nice rm), unicode homoglyphs. Verify each is caught.
+Table-driven tests covering all vectors from spec §10.1:
 
-- [ ] **Step 2: Run corpus tests, fix gaps, commit**
+| Category | Example | Expected |
+|----------|---------|----------|
+| Backslash escaping | `\rm -rf /` | RED (rm resolved) |
+| Quoting | `'rm' -rf /` | RED (rm resolved) |
+| command prefix | `command rm -rf /` | RED (wrapper stripped) |
+| env prefix | `env rm -rf /` | RED (wrapper stripped) |
+| sudo prefix | `sudo rm -rf /` | RED (wrapper stripped) |
+| Nested prefixes | `sudo env nice rm -rf /` | RED (all wrappers stripped) |
+| Brace expansion | `{rm,-rf,/}` | YELLOW (unresolvable) |
+| Hex/octal escaping | `$'\x72\x6d' -rf /` | RED (ANSI-C resolved) |
+| Variable indirection | `cmd=$'rm'; $cmd -rf /` | YELLOW (unresolvable) |
+| Command substitution | `$(echo rm) -rf /` | YELLOW (dynamic name) |
+| Unicode homoglyphs | `rｍ -rf /` | YELLOW (won't match GREEN) |
+| Newline injection | `echo ok\nrm -rf /` | RED (second statement caught) |
+| Pipe obfuscation | `echo x \| rm -rf /` | RED (rm in pipeline) |
+
+- [ ] **Step 2: Run tests, fix any gaps in parser/walker**
+
+- [ ] **Step 3: Commit**
 
 ```bash
-git add testdata/ internal/classifier/
 git commit -m "test: expand evasion test corpus with all §10.1 vectors"
 ```
 
