@@ -7,6 +7,7 @@ import (
 
 	"github.com/limbic-systems/stargate/internal/config"
 	"github.com/limbic-systems/stargate/internal/rules"
+	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -78,14 +79,32 @@ func wordToString(w *syntax.Word) string {
 
 // wordLiteral extracts the plain literal string from a word. Returns the
 // literal value and whether the word was fully resolvable (no dynamic parts).
+//
+// Resolution rules:
+//   - Lit values have backslashes stripped (bash: `\rm` resolves to `rm`).
+//   - SglQuoted with Dollar=true (ANSI-C `$'...'`) is decoded via expand.Format
+//     so `$'\x72\x6d'`, `$'\u0072\u006d'`, `$'\162\155'` all resolve to `rm`.
+//   - SglQuoted with Dollar=false ('...') returns the raw value.
+//   - DblQuoted is recursed via dblQuotedLiteral.
 func wordLiteral(w *syntax.Word) (string, bool) {
 	var sb strings.Builder
 	for _, part := range w.Parts {
 		switch p := part.(type) {
 		case *syntax.Lit:
-			sb.WriteString(p.Value)
+			// Strip backslash escapes: bash treats \c as c for most characters.
+			// e.g. `\rm` becomes `rm`, `r\m` becomes `rm`.
+			sb.WriteString(stripBackslashes(p.Value))
 		case *syntax.SglQuoted:
-			sb.WriteString(p.Value)
+			if p.Dollar {
+				// ANSI-C quoting: decode \x, \u, \U, \0NN, \a, \b, \t, \n, etc.
+				decoded, _, err := expand.Format(nil, p.Value, nil)
+				if err != nil {
+					return "", false
+				}
+				sb.WriteString(decoded)
+			} else {
+				sb.WriteString(p.Value)
+			}
 		case *syntax.DblQuoted:
 			inner, ok := dblQuotedLiteral(p)
 			if !ok {
@@ -98,6 +117,30 @@ func wordLiteral(w *syntax.Word) (string, bool) {
 		}
 	}
 	return sb.String(), true
+}
+
+// stripBackslashes removes bash-style backslash escapes from a literal.
+// Bash interprets `\c` as `c` for any character outside newlines. The sh
+// parser preserves backslashes in Lit.Value verbatim, so the walker must
+// strip them to get the effective command name. A trailing backslash is
+// preserved (it would be a line continuation in source, but in a parsed
+// Lit it is just a literal backslash).
+func stripBackslashes(s string) string {
+	if !strings.ContainsRune(s, '\\') {
+		return s
+	}
+	var sb strings.Builder
+	sb.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			// Skip the backslash, keep the next byte.
+			sb.WriteByte(s[i+1])
+			i++
+			continue
+		}
+		sb.WriteByte(s[i])
+	}
+	return sb.String()
 }
 
 // dblQuotedLiteral extracts a literal from a DblQuoted word part.
@@ -367,7 +410,23 @@ func walkCmd(ws *walkerState, cmd syntax.Command) {
 			if a.Value != nil {
 				walkWordSubsts(ws, a.Value)
 			}
+			// Array assignments (e.g. `declare -a arr=($(cmd))`) store the
+			// value in a.Array, not a.Value. Walk each element's Value.
+			// ArrayElem.Value can be nil for associative array entries
+			// like `declare -A x=([index]=)` — guard against that.
+			if a.Array != nil {
+				for _, elem := range a.Array.Elems {
+					if elem != nil && elem.Value != nil {
+						walkWordSubsts(ws, elem.Value)
+					}
+				}
+			}
 		}
+
+	case *syntax.TestClause:
+		// Extended test clause [[ ... ]] — walk Word nodes inside TestExpr
+		// tree so command substitutions like `[[ $(cmd) == x ]]` are found.
+		walkTestExpr(ws, c.X)
 
 	case *syntax.TimeClause:
 		// time <stmt> — walk the inner statement.
@@ -527,6 +586,24 @@ func walkWordParts(ws *walkerState, parts []syntax.WordPart) {
 				walkArithmExpr(ws, p.X)
 			}
 		}
+	}
+}
+
+// walkTestExpr recursively walks a test expression tree (as used inside
+// `[[ ... ]]`) and walks any Word nodes for nested command substitutions.
+// Handles BinaryTest (`[[ X == Y ]]`), UnaryTest (`[[ -f X ]]`),
+// ParenTest (`[[ ( X ) ]]`), and Word (the leaves).
+func walkTestExpr(ws *walkerState, expr syntax.TestExpr) {
+	switch t := expr.(type) {
+	case *syntax.Word:
+		walkWordSubsts(ws, t)
+	case *syntax.BinaryTest:
+		walkTestExpr(ws, t.X)
+		walkTestExpr(ws, t.Y)
+	case *syntax.UnaryTest:
+		walkTestExpr(ws, t.X)
+	case *syntax.ParenTest:
+		walkTestExpr(ws, t.X)
 	}
 }
 
