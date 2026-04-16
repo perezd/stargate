@@ -68,7 +68,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /health", s.handleHealth)
 	s.mux.HandleFunc("POST /classify", s.handleClassify)
 	s.mux.HandleFunc("POST /feedback", s.clf.HandleFeedback)
-	s.mux.HandleFunc("POST /test", stubHandler)
+	s.mux.HandleFunc("POST /test", s.handleTest)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -137,8 +137,3 @@ func writeJSONError(w http.ResponseWriter, code int, msg string) {
 	json.NewEncoder(w).Encode(map[string]string{"error": msg}) //nolint:errcheck
 }
 
-func stubHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotImplemented)
-	json.NewEncoder(w).Encode(map[string]string{"error": "not implemented"}) //nolint:errcheck
-}

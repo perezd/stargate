@@ -17,6 +17,8 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/limbic-systems/stargate/internal/config"
 	"github.com/limbic-systems/stargate/internal/corpus"
 	"github.com/limbic-systems/stargate/internal/feedback"
@@ -58,6 +60,17 @@ type ClassifyRequest struct {
 	CWD         string         `json:"cwd,omitempty"`
 	Description string         `json:"description,omitempty"`
 	Context     map[string]any `json:"context,omitempty"`
+
+	// DryRun is set by the /test handler to skip side effects (corpus writes,
+	// cache reads/writes, feedback token generation). Tagged json:"-" so it
+	// cannot be set via HTTP JSON input. Set only by the server-side handler.
+	DryRun bool `json:"-"`
+
+	// UseCache, when true in combination with DryRun, allows cache reads
+	// during dry-run for debugging caching behavior. Cache writes are
+	// always skipped during dry-run regardless of this flag. Tagged json:"-"
+	// because the HTTP boundary is the TestRequest wrapper struct.
+	UseCache bool `json:"-"`
 }
 
 // ClassifyResponse is the output of the classifier.
@@ -313,6 +326,12 @@ func (c *Classifier) Classify(ctx context.Context, req ClassifyRequest) *Classif
 	ctx, span := c.tel.StartClassifySpan(ctx)
 	defer span.End()
 
+	// Dry-run requests (/test endpoint) tag their spans so operators can
+	// filter test traffic from real classifications in Grafana dashboards.
+	if req.DryRun {
+		span.SetAttributes(attribute.Bool("stargate.dry_run", true))
+	}
+
 	traceID := c.tel.TraceIDFromContext(ctx)
 	if traceID == "" {
 		traceID = newTraceID() // fallback when telemetry disabled
@@ -453,7 +472,10 @@ func (c *Classifier) Classify(ctx context.Context, req ClassifyRequest) *Classif
 	// 7. Generate feedback token for YELLOW decisions — only when tool_use_id
 	// is present. Without it we cannot correlate feedback to a specific tool
 	// invocation, so we skip token generation and trace recording entirely.
-	if resp.Decision == "yellow" {
+	//
+	// Dry-run: never generate a feedback token (the /test caller is a developer
+	// inspecting classification behavior, not an agent that will return feedback).
+	if resp.Decision == "yellow" && !req.DryRun {
 		toolUseID := ""
 		if req.Context != nil {
 			if v, ok := req.Context["tool_use_id"].(string); ok {
@@ -514,13 +536,20 @@ func (c *Classifier) reviewWithLLM(state *classifyState) *LLMReviewResult {
 	// Command cache check — skip everything on HIT.
 	// This must return before postProcess is defined so cache hits never
 	// write to corpus or command cache.
-	if cached, hit := c.cmdCache.Lookup(state.req.Command, state.req.CWD); hit {
-		result.Performed = false
-		result.Rounds = 0
-		result.Decision = cached.Decision
-		result.Action = cached.Action
-		result.Reasoning = "command cache hit (no LLM call)"
-		return result
+	//
+	// Dry-run: skip cache reads by default. When UseCache=true (operator
+	// explicitly wants to test cache behavior), allow reads. Cache writes
+	// are always skipped in dry-run via the guard in postProcess.
+	cacheAllowed := !state.req.DryRun || state.req.UseCache
+	if cacheAllowed {
+		if cached, hit := c.cmdCache.Lookup(state.req.Command, state.req.CWD); hit {
+			result.Performed = false
+			result.Rounds = 0
+			result.Decision = cached.Decision
+			result.Action = cached.Action
+			result.Reasoning = "command cache hit (no LLM call)"
+			return result
+		}
 	}
 
 	// Populate corpus summary in response — declared before postProcess so
@@ -534,6 +563,11 @@ func (c *Classifier) reviewWithLLM(state *classifyState) *LLMReviewResult {
 	postProcess := func() {
 		if result.Decision == "" {
 			return // no decision to store (LLM error)
+		}
+
+		// Dry-run: skip all side effects (corpus write, cache write).
+		if state.req.DryRun {
+			return
 		}
 
 		// Validate LLM decision before persisting — unexpected values from the
