@@ -2974,7 +2974,7 @@ Table-driven tests covering all vectors from spec §10.1 plus panel-identified g
 
 **Walker bugs to fix in Step 2** (discovered by panel, confirmed against code):
 1. **ANSI-C `$'...'` not decoded:** `wordLiteral` in walker.go returns raw `p.Value` for `*syntax.SglQuoted` without checking `p.Dollar`. When `Dollar=true`, value contains raw escape sequences (`\x72\x6d`), not decoded bytes (`rm`). Fix: decode ANSI-C escapes when `p.Dollar == true`. Affects hex/octal and Unicode \u test rows.
-2. **Array assignment `a.Array` not walked:** `DeclClause` handler only walks `a.Value` (scalar RHS), misses `a.Array` (`*syntax.ArrayExpr`) for array assignments like `declare -a arr=($(rm))`. Fix: iterate `a.Array.Elems` and walk each element's `Value` word parts.
+2. **Array assignment `a.Array` not walked:** `DeclClause` handler only walks `a.Value` (scalar RHS), misses `a.Array` (`*syntax.ArrayExpr`) for array assignments like `declare -a arr=($(rm))`. Fix: iterate `a.Array.Elems` and walk each element's `Value` word parts. Guard `elem.Value != nil` — associative array entries like `([index]=)` have nil Value.
 
 - [ ] **Step 2: Run tests, fix any gaps in parser/walker**
 
