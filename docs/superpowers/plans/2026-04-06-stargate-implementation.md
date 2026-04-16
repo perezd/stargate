@@ -2932,49 +2932,94 @@ git commit -m "feat: implement stargate test CLI subcommand"
 
 - [ ] **Step 1: Expand evasion test matrix**
 
-Table-driven tests covering all vectors from spec §10.1 plus panel-identified gaps:
+Table-driven tests organized by severity. Tests call `parser.ParseAndWalk()` directly and assert on `[]CommandInfo` fields. Use real newlines in Go strings, not `\n` literals.
+
+**CRITICAL — Commands invisible to the walker (evasion bypasses classification entirely):**
 
 | Category | Example | Expected | Assert |
 |----------|---------|----------|--------|
-| Backslash escaping | `\rm -rf /` | RED | Name="rm" |
+| TestClause `[[ ]]` subst | `[[ $(rm -rf /) == "yes" ]]` | inner found | Name="rm", InSubstitution=true |
+| TestClause unary | `[[ -f $(generate_path) ]]` | inner found | InSubstitution=true |
+| TestClause both sides | `[[ $(cmd1) == $(cmd2) ]]` | both found | InSubstitution=true on both |
+| Array assignment subst | `declare -a arr=($(rm -rf /))` | inner found | InSubstitution=true |
+| Assoc array subst | `declare -A map=([key]=$(rm))` | inner found | InSubstitution=true |
+| local array subst | `local -a arr=($(rm))` | inner found | InSubstitution=true |
+| ANSI-C hex escape | `$'\x72\x6d' -rf /` | RED | Name="rm" (decoded) |
+| ANSI-C octal escape | `$'\162\155' -rf /` | RED | Name="rm" (decoded) |
+| ANSI-C Unicode \u | `$'\u0072\u006d' -rf /` | RED | Name="rm" (decoded) |
+| ANSI-C mixed | `r$'\x6d' -rf /` | RED | Name="rm" (Lit + decoded concat) |
+| Backslash in Lit | `\rm -rf /` | RED | Name="rm" (backslash stripped) |
+| Backslash mid-word | `r\m -rf /` | RED | Name="rm" (backslash stripped) |
+| Backslash on wrapper | `\s\u\d\o rm` | RED | Name="rm" (wrapper resolved after strip) |
+
+**HIGH — Implemented but untested code paths:**
+
+| Category | Example | Expected | Assert |
+|----------|---------|----------|--------|
 | Quoting | `'rm' -rf /` | RED | Name="rm" |
 | command prefix | `command rm -rf /` | RED | Name="rm" (wrapper stripped) |
 | env prefix | `env rm -rf /` | RED | Name="rm" |
 | sudo prefix | `sudo rm -rf /` | RED | Name="rm" |
 | Nested prefixes | `sudo env nice rm -rf /` | RED | Name="rm" |
+| sudo --flag=value | `sudo --user=root rm -rf /` | RED | Name="rm" |
 | Brace expansion | `{rm,-rf,/}` | YELLOW | unresolvable_expansion |
-| Quoted braces | `"{rm,-rf,/}"` | Not brace expansion | literal string |
-| Hex/octal escaping | `$'\x72\x6d' -rf /` | RED | Name="rm" (ANSI-C resolved) |
-| Unicode \u escape | `$'\u0072\u006d' -rf /` | RED | Name="rm" (verify \u path) |
+| Quoted braces | `"{rm,-rf,/}"` | Not brace | literal string |
 | Variable indirection | `cmd=$'rm'; $cmd -rf /` | YELLOW | unresolvable_expansion |
 | Command substitution | `$(echo rm) -rf /` | YELLOW | InSubstitution=true on inner |
-| Process substitution | `cat <(rm -rf /)` | inner RED | InSubstitution=true |
-| ParamExp substitution | `${x:-$(rm -rf /)}` | inner YELLOW | InSubstitution=true |
-| ArithmExp substitution | `echo $(($(rm)))` | inner YELLOW | InSubstitution=true |
-| Redirect operand | `> $(rm -rf /)` | inner YELLOW | InSubstitution=true |
-| for/case header | `for x in $(rm); do echo; done` | inner YELLOW | InSubstitution=true |
-| Array assignment subst | `declare -a arr=($(rm -rf /))` | inner YELLOW | InSubstitution=true, walked via DeclClause |
-| Unicode homoglyphs | `rｍ -rf /` | YELLOW | won't match GREEN rules |
-| Newline injection | `echo ok` + `\n` + `rm -rf /` | RED | Use real newline in test |
-| Pipe obfuscation | `echo x \| rm -rf /` | RED | PipelinePosition=2, Name="rm" |
-| eval wrapper | `eval "rm -rf /"` | RED | Name="eval" (RED rule exists for eval) |
-| Heredoc substitution | `cat <<EOF\n$(rm -rf /)\nEOF` | inner YELLOW | Assert outer cat found AND inner rm has InSubstitution=true |
-| coproc prefix | `coproc rm -rf /` | RED | Name="rm" (walker recurses into inner statement) |
-| Alias (raw name) | `rm -rf /` | RED | aliases not expanded by parser |
+| Process substitution in | `cat <(rm -rf /)` | inner RED | InSubstitution=true |
+| Process substitution out | `>(rm -rf /)` | inner found | InSubstitution=true |
+| Process subst both | `diff <(cmd1) <(cmd2)` | both found | InSubstitution=true on both |
+| ParamExp substitution | `${x:-$(rm -rf /)}` | inner found | InSubstitution=true |
+| ArithmExp substitution | `echo $(($(rm)))` | inner found | InSubstitution=true |
+| ArithmCmd substitution | `(( x = $(rm) ))` | inner found | InSubstitution=true |
+| LetClause substitution | `let "x = $(rm)"` | inner found | InSubstitution=true |
+| Redirect operand | `> $(rm -rf /)` | inner found | InSubstitution=true |
+| for header subst | `for x in $(rm); do echo; done` | inner found | InSubstitution=true |
+| select statement subst | `select x in $(rm); do echo; done` | inner found | InSubstitution=true |
+| Heredoc substitution | `cat <<EOF` + `\n$(rm)\n` + `EOF` | both found | outer=cat, inner rm InSubstitution=true |
+| Herestring substitution | `cat <<< $(rm -rf /)` | both found | outer=cat, inner rm |
+| coproc prefix | `coproc rm -rf /` | RED | Name="rm" (walker recurses into inner) |
+| TimeClause | `time rm -rf /` | RED | Name="rm" (syntax keyword, not wrapper) |
+| ExtGlob cmd position | `@(rm\|ls) -rf /` | YELLOW | Name="" (unresolvable, fail-closed) |
+| Assignment-only subst | `FOO=$(rm -rf /)` | inner found | InSubstitution=true, no outer command |
+| Multi-assignment subst | `A=$(cmd1) B=$(cmd2)` | both found | InSubstitution=true on both |
+| Locale double-quote | `$"rm" -rf /` | RED | Name="rm" (Dollar DblQuoted) |
 
-**Test implementation notes** (from shell expert panel review, 3 rounds):
-- Use real newlines in Go test strings, not `\n` literals
+**MEDIUM — Classification correctness and edge cases:**
+
+| Category | Example | Expected | Assert |
+|----------|---------|----------|--------|
+| Unicode homoglyphs | `rｍ -rf /` | YELLOW | won't match GREEN rules |
+| Newline injection | `echo ok` + real `\n` + `rm -rf /` | RED | second statement found, Name="rm" |
+| Pipe obfuscation | `echo x \| rm -rf /` | RED | PipelinePosition=2, Name="rm" |
+| eval wrapper | `eval "rm -rf /"` | RED | Name="eval" (RED rule exists) |
+| Alias (raw name) | `rm -rf /` | RED | aliases not expanded by parser |
+| Subshell in pipeline | `(cmd1) \| cmd2` | both found | cmd1: PipePos=1, SubshellDepth=1; cmd2: PipePos=2 |
+| while condition | `while check; do cmd; done` | both found | "check": InCondition=true, "cmd": InCondition=false |
+| until loop | `until false; do rm; done` | both found | "false": InCondition=true, "rm": InCondition=false |
+| elif chain | `if c1; then c2; elif c3; then c4; fi` | all 4 found | c1,c3: InCondition=true; c2,c4: not |
+| Glob in cmd position | `/usr/bin/r*` | YELLOW | Name="/usr/bin/r*" (unresolved glob) |
+| Nested function def | `f() { g() { rm; }; }` | found | Name="rm", InFunction="g" |
+
+**Test implementation notes** (from shell expert deep analysis):
 - Evasion tests call `parser.ParseAndWalk()` directly and assert on `[]CommandInfo` fields
 - Classifier-level tests remain in the classifier package for end-to-end coverage
-- Assert specific `CommandInfo` fields (Name, PipelinePosition, InSubstitution), not just final classification
-- Verify `Name` field equals resolved value (e.g., "rm") for ANSI-C quoting tests
+- Assert specific `CommandInfo` fields (Name, PipelinePosition, InSubstitution, InCondition, InFunction, SubshellDepth)
+- Verify `Name` field equals the decoded/stripped value for ANSI-C and backslash tests
 - Process substitution `<()` / `>()` must set `InSubstitution=true`
-- Heredoc tests: assert both the outer command and the inner substitution command
+- Heredoc/herestring tests: assert both the outer command and the inner substitution
 - eval: has a RED rule — verify Name="eval", not YELLOW dynamic execution
+- TestClause tests require walker fix first (no case for `*syntax.TestClause`)
 
 **Walker bugs to fix in Step 2** (discovered by panel, confirmed against code):
-1. **ANSI-C `$'...'` not decoded:** `wordLiteral` in walker.go returns raw `p.Value` for `*syntax.SglQuoted` without checking `p.Dollar`. When `Dollar=true`, value contains raw escape sequences (`\x72\x6d`), not decoded bytes (`rm`). Fix: decode ANSI-C escapes when `p.Dollar == true`. Affects hex/octal and Unicode \u test rows.
-2. **Array assignment `a.Array` not walked:** `DeclClause` handler only walks `a.Value` (scalar RHS), misses `a.Array` (`*syntax.ArrayExpr`) for array assignments like `declare -a arr=($(rm))`. Fix: iterate `a.Array.Elems` and walk each element's `Value` word parts. Guard `elem.Value != nil` — associative array entries like `([index]=)` have nil Value.
+
+1. **`TestClause` (`[[ ]]`) not walked:** `walkCmd` has no case for `*syntax.TestClause`. CmdSubst inside `[[ ]]` is completely invisible. Fix: add `case *syntax.TestClause:` that recursively walks `TestExpr` nodes (`BinaryTest.X`/`.Y`, `UnaryTest.X`, `ParenTest.X`), extracting Word nodes and calling `walkWordSubsts`.
+
+2. **Backslash in Lit values not stripped:** `wordLiteral` returns raw `p.Value` for `*syntax.Lit`, which contains backslashes (e.g., `\rm` → Name=`\rm`). Bash resolves `\rm` to `rm` (backslash prevents alias expansion but command name is still `rm`). Fix: strip unquoted backslashes from `Lit.Value` in `wordLiteral`.
+
+3. **ANSI-C `$'...'` not decoded:** `wordLiteral` returns raw `p.Value` for `*syntax.SglQuoted` without checking `p.Dollar`. When `Dollar=true`, value contains raw escape sequences (`\x72\x6d`), not decoded bytes (`rm`). Fix: decode ANSI-C escapes when `p.Dollar == true`. Affects hex, octal, and Unicode \u/\U test rows.
+
+4. **Array assignment `a.Array` not walked:** `DeclClause` handler only walks `a.Value` (scalar RHS), misses `a.Array` (`*syntax.ArrayExpr`). Fix: iterate `a.Array.Elems` and walk each element's `Value` word parts. Guard `elem.Value != nil` — associative array entries like `([index]=)` have nil Value.
 
 - [ ] **Step 2: Run tests, fix any gaps in parser/walker**
 

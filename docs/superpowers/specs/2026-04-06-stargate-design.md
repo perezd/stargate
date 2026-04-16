@@ -2380,18 +2380,24 @@ When `telemetry.enabled = false` (the default), the `Telemetry` struct must be a
 
 | Evasion Technique | Mitigation |
 |-------------------|------------|
-| Backslash escaping (`\rm`) | Parser resolves escapes — AST contains `rm` |
+| Backslash escaping (`\rm`) | Walker strips backslashes from Lit values — `\rm` resolves to `rm` **(M8 fix: walker.go wordLiteral)** |
 | Quoting (`'rm' -rf /`) | Parser strips quotes — AST contains `rm` |
 | `command rm -rf /` | Walker recognizes `command`, `builtin`, `sudo`, `doas`, `nice`, `nohup`, `time`, `strace`, `watch`, `timeout` prefixes |
 | `env rm -rf /` | Walker recognizes `env` prefix |
-| Brace expansion (`{rm,-rf,/}`) | Parser does not expand braces — brace patterns in command-name position route to `unresolvable_expansion` -> YELLOW |
-| Hex/octal escaping (`$'\x72\x6d'`) | Parser resolves ANSI-C quoting in Bash mode |
+| Brace expansion (`{rm,-rf,/}`) | Parser does not expand braces — brace patterns in command-name position route to `unresolvable_expansion` → YELLOW |
+| Hex/octal escaping (`$'\x72\x6d'`) | Walker decodes ANSI-C quoting when `SglQuoted.Dollar=true` **(M8 fix: walker.go wordLiteral)** |
+| Unicode escape (`$'\u0072\u006d'`) | Same ANSI-C decode path handles `\u` and `\U` escapes |
 | Variable indirection (`cmd=$'rm'; $cmd -rf /`) | Flagged as `unresolvable_expansion` → YELLOW |
 | Command substitution (`$(echo rm) -rf /`) | Substitution contents walked; dynamic command name → YELLOW |
+| Process substitution (`<(cmd)`, `>(cmd)`) | Walker walks ProcSubst body with InSubstitution=true |
+| TestClause (`[[ $(cmd) ]]`) | Walker walks TestExpr nodes (BinaryTest, UnaryTest, ParenTest) **(M8 fix: walkCmd)** |
+| Array assignment (`declare -a arr=($(cmd))`) | Walker walks ArrayExpr elements **(M8 fix: DeclClause handler)** |
 | PATH manipulation | Rule engine matches command names, not paths |
 | Alias abuse | Aliases not expanded by parser; raw command name matched |
 | Unicode homoglyphs | Parser operates on bytes; homoglyphs won't match GREEN rules → YELLOW |
 | Newline injection | Parser handles multi-line scripts; every statement walked |
+| ExtGlob in cmd position (`@(rm\|ls)`) | `wordLiteral` returns empty — unresolvable → YELLOW (fail-closed) |
+| Glob in cmd position (`/usr/bin/r*`) | Not expanded; literal glob string won't match rules → YELLOW |
 | Malicious `.git/config` | Scopes are in `stargate.toml` (outside repo); `.git/config` is a claim to verify, not a trust anchor |
 | Prompt injection adding remotes | Resolver validates inferred repo against scope allowlist |
 | Traversal in `gh api` paths | Resolver rejects `..`, `%`, `//` in API paths |
@@ -2399,8 +2405,11 @@ When `telemetry.enabled = false` (the default), the `Telemetry` struct must be a
 | Nested substitution in ArithmExp (`$(($(cmd)))`) | Walker recurses via walkArithmExpr (covers BinaryArithm, UnaryArithm, ParenArithm, FlagsArithm) |
 | Commands in ArithmCmd/LetClause (`(( $(cmd) ))`) | Walker walks ArithmCmd.X and LetClause.Exprs |
 | Commands in redirect operands (`> "$(cmd)"`) | Redirect words and heredocs walked for substitutions |
+| Commands in herestrings (`<<< $(cmd)`) | Herestring word walked for substitutions |
 | Commands in for-loop headers (`for x in $(cmd)`) | WordIter items and CStyleLoop Init/Cond/Post walked |
+| Commands in select headers (`select x in $(cmd)`) | Same as for-loop (ForClause with Select=true) |
 | Commands in case patterns (`case $x in $(pat))`) | Pattern words walked for substitutions |
+| Assignment-only subst (`FOO=$(cmd)`) | Assigns walked for substitutions even without a command name |
 | Quoted brace expansion (`"{rm,ls}"`) | Only unquoted bare Lit words trigger brace detection |
 | Wrapper flag evasion (`sudo --unknown rm`) | Unknown flags stop stripping (fail-closed) |
 
