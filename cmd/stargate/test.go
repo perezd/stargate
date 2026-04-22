@@ -101,12 +101,19 @@ func handleTest(args []string, configPath string, _ bool) int {
 	return 0
 }
 
+// testHTTPRequest is the wire format for the /test POST body.
+type testHTTPRequest struct {
+	Command  string `json:"command"`
+	CWD      string `json:"cwd,omitempty"`
+	UseCache bool   `json:"use_cache,omitempty"`
+}
+
 // runServer POSTs to <url>/test and returns the parsed response.
 func runServer(ctx context.Context, f *testFlags) (*classifier.ClassifyResponse, error) {
-	body := map[string]any{
-		"command":   f.command,
-		"cwd":       f.cwd,
-		"use_cache": f.useCache,
+	body := testHTTPRequest{
+		Command:  f.command,
+		CWD:      f.cwd,
+		UseCache: f.useCache,
 	}
 	buf, err := json.Marshal(body)
 	if err != nil {

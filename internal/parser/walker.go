@@ -144,6 +144,10 @@ func stripBackslashes(s string) string {
 }
 
 // dblQuotedLiteral extracts a literal from a DblQuoted word part.
+// Backslash stripping is NOT applied here — inside double quotes, bash
+// only interprets \$, \\, \", \`, and \+newline. Other backslash
+// sequences like "\r" are literal (the backslash is preserved). The
+// parser already handles this distinction, so we return p.Value raw.
 func dblQuotedLiteral(dq *syntax.DblQuoted) (string, bool) {
 	var sb strings.Builder
 	for _, part := range dq.Parts {

@@ -4,9 +4,14 @@ import (
 	"context"
 	"testing"
 
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/limbic-systems/stargate/internal/classifier"
 	"github.com/limbic-systems/stargate/internal/config"
 	"github.com/limbic-systems/stargate/internal/llm"
+	"github.com/limbic-systems/stargate/internal/telemetry"
 )
 
 // TestDryRun_NoFeedbackTokenForYellow verifies that DryRun=true prevents
@@ -128,4 +133,75 @@ func TestDryRun_DecisionIdenticalToNonDryRun(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDryRun_SpanHasDryRunAttribute verifies that DryRun=true sets the
+// stargate.dry_run=true span attribute, so operators can filter /test
+// traffic from real classifications in Grafana dashboards.
+func TestDryRun_SpanHasDryRunAttribute(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithSyncer(exporter),
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+	)
+	t.Cleanup(func() { tp.Shutdown(context.Background()) })
+
+	clf := newClassifier(t)
+	clf.SetTelemetry(&testTelemetry{tp: tp})
+
+	clf.Classify(context.Background(), classifier.ClassifyRequest{
+		Command: "ls",
+		DryRun:  true,
+	})
+
+	spans := exporter.GetSpans()
+	var found bool
+	for _, span := range spans {
+		if span.Name == "stargate.classify" {
+			for _, attr := range span.Attributes {
+				if attr.Key == "stargate.dry_run" && attr.Value.AsBool() {
+					found = true
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("DryRun=true should set stargate.dry_run=true attribute on classify span")
+	}
+
+	// Also verify: DryRun=false should NOT have the attribute.
+	exporter.Reset()
+	clf.Classify(context.Background(), classifier.ClassifyRequest{
+		Command: "ls",
+		DryRun:  false,
+	})
+	spans = exporter.GetSpans()
+	for _, span := range spans {
+		if span.Name == "stargate.classify" {
+			for _, attr := range span.Attributes {
+				if attr.Key == "stargate.dry_run" {
+					t.Error("DryRun=false should NOT set stargate.dry_run attribute")
+				}
+			}
+		}
+	}
+}
+
+// testTelemetry embeds NoOpTelemetry and overrides span methods to use a
+// real TracerProvider so we can verify span attributes.
+type testTelemetry struct {
+	telemetry.NoOpTelemetry
+	tp *sdktrace.TracerProvider
+}
+
+func (t *testTelemetry) StartClassifySpan(ctx context.Context) (context.Context, trace.Span) {
+	return t.tp.Tracer("stargate-test").Start(ctx, "stargate.classify")
+}
+
+func (t *testTelemetry) TraceIDFromContext(ctx context.Context) string {
+	sc := trace.SpanFromContext(ctx).SpanContext()
+	if sc.HasTraceID() {
+		return sc.TraceID().String()
+	}
+	return ""
 }
