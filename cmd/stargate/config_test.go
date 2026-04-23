@@ -91,11 +91,14 @@ func captureStdout(t *testing.T, f func()) string {
 	if err != nil {
 		t.Fatalf("os.Pipe: %v", err)
 	}
-	defer r.Close()
-	defer func() { os.Stdout = old }()
 	os.Stdout = w
+	defer func() {
+		os.Stdout = old
+		w.Close()
+		r.Close()
+	}()
 	f()
-	w.Close()
+	w.Close() // close write end so ReadAll below returns
 	buf, err := io.ReadAll(r)
 	if err != nil {
 		t.Fatalf("reading captured stdout: %v", err)
