@@ -91,11 +91,11 @@ func captureStdout(t *testing.T, f func()) string {
 	if err != nil {
 		t.Fatalf("os.Pipe: %v", err)
 	}
-	os.Stdout = w
+	defer r.Close()
 	defer func() { os.Stdout = old }()
+	os.Stdout = w
 	f()
 	w.Close()
-	defer r.Close()
 	buf, err := io.ReadAll(r)
 	if err != nil {
 		t.Fatalf("reading captured stdout: %v", err)
@@ -150,7 +150,10 @@ password = "super-secret-password"
 }
 
 func TestConfigDump_InvalidConfig(t *testing.T) {
-	path := writeTestConfig(t, `[classifier]\ndefault_decision = "invalid"`)
+	path := writeTestConfig(t, `
+[classifier]
+default_decision = "invalid"
+`)
 	code := handleConfigDump(path)
 	if code != 1 {
 		t.Errorf("exit = %d, want 1 for invalid config", code)
@@ -192,6 +195,22 @@ func TestConfigDump_RoundTripIdempotency(t *testing.T) {
 
 	if dump1 != dump2 {
 		t.Errorf("round-trip not idempotent")
+	}
+}
+
+func TestConfigDump_SystemPromptScrubbed(t *testing.T) {
+	cfg := testMinimalConfig + `
+[llm]
+system_prompt = "Use API key sk-ant-1234567890abcdef to authenticate"
+`
+	path := writeTestConfig(t, cfg)
+	out := captureStdout(t, func() {
+		if code := handleConfigDump(path); code != 0 {
+			t.Fatalf("exit = %d", code)
+		}
+	})
+	if strings.Contains(out, "sk-ant-1234567890abcdef") {
+		t.Error("dump output contains raw API key in system_prompt — scrubbing failed")
 	}
 }
 

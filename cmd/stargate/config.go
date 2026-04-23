@@ -92,7 +92,8 @@ func handleConfigDump(configPath string) int {
 	if cfg.LLM.SystemPrompt != "" {
 		s, scrubErr := scrub.New(cfg.Scrubbing.ExtraPatterns)
 		if scrubErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: scrubber init failed, system_prompt may contain secrets: %v\n", scrubErr)
+			fmt.Fprintf(os.Stderr, "warning: scrubber init failed, redacting system_prompt entirely: %v\n", scrubErr)
+			cfg.LLM.SystemPrompt = "[REDACTED - scrubber error]"
 		} else {
 			cfg.LLM.SystemPrompt = s.Text(cfg.LLM.SystemPrompt)
 		}
