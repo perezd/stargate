@@ -29,6 +29,14 @@ func isLoopbackAddr(addr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+const serveUsage = `Usage: stargate serve [flags]
+
+Start the HTTP classification server.
+
+Flags:
+  -l, --listen string   Override listen address (default from config)
+`
+
 func handleServe(args []string, configPath string, verbose bool) int {
 	// Parse -l/--listen flag from args.
 	var listenOverride string
@@ -36,6 +44,9 @@ func handleServe(args []string, configPath string, verbose bool) int {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
+		case arg == "--help" || arg == "-h":
+			fmt.Print(serveUsage)
+			return 0
 		case arg == "-l" || arg == "--listen":
 			i++
 			if i >= len(args) {

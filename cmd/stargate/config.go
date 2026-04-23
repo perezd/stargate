@@ -7,9 +7,24 @@ import (
 	"github.com/limbic-systems/stargate/internal/config"
 )
 
+const configUsage = `Usage: stargate config <action>
+
+Configuration inspection and validation.
+
+Actions:
+  validate    Parse and validate the config file
+  dump        Print the fully resolved config as TOML
+  rules       Print a summary table of all loaded rules
+  scopes      Print all defined scopes and their values
+`
+
 func handleConfig(args []string, configPath string, verbose bool) int {
+	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
+		fmt.Print(configUsage)
+		return 0
+	}
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: stargate config <validate|dump|rules|scopes>")
+		fmt.Fprint(os.Stderr, configUsage)
 		return 1
 	}
 
