@@ -95,6 +95,7 @@ func captureStdout(t *testing.T, f func()) string {
 	defer func() { os.Stdout = old }()
 	f()
 	w.Close()
+	defer r.Close()
 	buf, err := io.ReadAll(r)
 	if err != nil {
 		t.Fatalf("reading captured stdout: %v", err)

@@ -34,7 +34,7 @@ const serveUsage = `Usage: stargate serve [flags]
 Start the HTTP classification server.
 
 Flags:
-  -l, --listen string   Override listen address (default from config)
+  -l, --listen string   Override listen address (must be loopback; default from config)
 `
 
 func handleServe(args []string, configPath string, verbose bool) int {

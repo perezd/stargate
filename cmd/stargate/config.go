@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -179,9 +180,16 @@ func handleConfigScopes(configPath string) int {
 		return 0
 	}
 
-	for name, patterns := range cfg.Scopes {
+	// Sort scope names for deterministic output across runs.
+	names := make([]string, 0, len(cfg.Scopes))
+	for name := range cfg.Scopes {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+
+	for _, name := range names {
 		fmt.Printf("%s:\n", name)
-		for _, p := range patterns {
+		for _, p := range cfg.Scopes[name] {
 			fmt.Printf("  - %s\n", p)
 		}
 	}

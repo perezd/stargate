@@ -10,7 +10,7 @@ version := `v=$(git describe --tags --always 2>/dev/null || echo "dev"); if echo
 dist := "dist"
 
 # Install directory (override with: just install INSTALL_DIR=/usr/local/bin)
-INSTALL_DIR := `go env GOPATH`+ "/bin"
+INSTALL_DIR := `go env GOPATH | cut -d: -f1`+ "/bin"
 
 # Build flags
 ldflags := "-X main.Version=" + version
