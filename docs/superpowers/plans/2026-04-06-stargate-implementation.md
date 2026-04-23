@@ -3029,61 +3029,169 @@ Table-driven tests organized by severity. Tests call `parser.ParseAndWalk()` dir
 git commit -m "test: expand evasion test corpus with all §10.1 vectors"
 ```
 
+> **M8 Retrospective (post-implementation):** 11 Copilot threads + 3 deep-review bugs, 5 rounds + 1
+> code review round, 1 PR. Scope: 1983 lines, 11 files. Notably, this milestone was partially
+> implemented by a lower-quality model variant, and a subsequent deep code review (by the correct
+> model) caught 3 real bugs that the original implementation and Copilot both missed.
+>
+> **Four patterns drove the findings:**
+>
+> 1. **Comment/code accuracy (5 threads)** — Unused verbose parameter with misleading comment,
+>    test exercising wrong code path (TestFormatOneLiner_WithRule without a Rule), misleading
+>    comment about ClassifyRequest field, wrong comment about function body walking semantics,
+>    test name "IgnoredFromJSON" when behavior is rejection. **Lesson:** Same pattern as M5/M7.
+>    Every comment must match the code. Test names must describe the actual assertion.
+>
+> 2. **Test coverage gaps (3 threads + 1 code-review)** — Corpus test didn't exercise a path
+>    that would actually write, missing telemetry span attribute test, missing timeout validation
+>    test for positional-arg path. **Lesson:** For every guard/branch added, write a test that
+>    fails when the guard is removed. "The test should break if the fix is reverted."
+>
+> 3. **Security evasion vectors (3 code-review bugs)** — Null byte not truncated after ANSI-C
+>    decode ($'rm\x00garbage' bypassed rule engine), associative array keys not walked
+>    ([$(cmd)]=val invisible), timeout validation bypass with positional arg. **Lesson:**
+>    Shell parsing has subtle C-level semantics (null termination, exec vs parse semantics)
+>    that higher-level tests don't cover. Security-critical parser changes need adversarial
+>    review by a specialist, not just automated review. Model quality matters for security code.
+>
+> 4. **Resource management (2 threads)** — Unbounded stdin read, classification metrics
+>    polluting dashboards on dry-run. **Lesson:** Every I/O read must be bounded. Every
+>    metric emission must consider whether the request is a test/debug path.
+>
+> **Key bugs caught by deep review (would have been production issues):**
+> - Null byte evasion: $'rm\x00garbage' → kernel executes rm, rule engine sees rm\x00garbage
+> - Array key CmdSubst invisible: declare -A arr=([$(cmd)]=val) not walked
+> - Timeout 0s with positional arg bypassed validation guard
+>
+> **Lesson on model quality:** The M8 implementation was partially done by a regression model.
+> Copilot's automated review caught comment/test issues but missed all three security bugs.
+> The deep code review by the correct model found all three in a single pass. For security-
+> critical components (parser, walker, classifier guards), implementation AND review must
+> use the strongest available model. Automated review (Copilot) is necessary but not sufficient.
+>
+> **Trend:** M1:84 → M2:61 → M3:28 → M4:91 → M5:100 → M6:34 → M7:41 → M8:14.
+> Lowest thread count yet (including deep review). The thorough panel design review
+> (4 rounds, shell expert deep dive) prevented most issues before implementation.
+> The 3 security bugs were implementation errors, not design gaps.
+
 ---
 
 ## M9: Distribution
 
-Goal: Makefile, cross-compilation, README, example config, install script, LICENSE.
+Goal: Justfile, cross-compilation, README, example config, install script, LICENSE, remaining config subcommands.
 
-### Task 9.1: Makefile and cross-compilation
+> **Cross-milestone lessons applied (M1–M8):**
+>
+> From M1–M7 (comment accuracy): README and config output must match actual CLI behavior.
+> Test any documented examples actually work.
+>
+> From M5 (config defaults): config dump must show effective defaults, not just user-set values.
+> Document which fields have pointer semantics (*bool, *int) in the README.
+>
+> From M6 (error visibility): config validate must report ALL errors, not stop at first.
+> config dump on invalid config must fail with clear error, not dump partial state.
+>
+> From M8 (model quality): Distribution code is not security-critical — standard model
+> quality is sufficient. No parser/walker/classifier changes in this milestone.
+>
+> From M8 (resource management): Justfile cross-compilation must not leave temp artifacts.
+> clean target must be thorough.
+
+### Task 9.1: Justfile and cross-compilation
 
 **Files:**
-- Create: `Makefile`
+- Create: `Justfile`
 
-- [ ] **Step 1: Create Makefile**
+- [ ] **Step 1: Create Justfile**
 
-Targets: `build` (local), `build-all` (cross-compile linux/darwin × amd64/arm64), `test`, `lint` (go vet), `clean`. Use `CGO_ENABLED=0` for static binaries. Version injected via `-ldflags`.
+Targets:
+- `build` — local platform, `CGO_ENABLED=0` for static binary
+- `build-all` — cross-compile linux/darwin × amd64/arm64 (4 binaries)
+- `test` — `go test ./...` with race detector
+- `vet` — `go vet ./...`
+- `lint` — `go vet` (no external linter dependency)
+- `clean` — remove all build artifacts
+- `install` — install to `$GOPATH/bin` or `/usr/local/bin`
+
+Version injected via `-ldflags="-X main.Version=$(VERSION)"`.
+Binary naming: `stargate-$(GOOS)-$(GOARCH)`.
 
 - [ ] **Step 2: Test all targets, commit**
 
+Verify: `just build` produces a working binary, `just test` passes, `just clean` removes artifacts, `just build-all` produces 4 binaries.
+
 ```bash
-git add Makefile
-git commit -m "chore: add Makefile with cross-compilation targets"
+git commit -m "chore: add Justfile with cross-compilation targets"
 ```
 
-### Task 9.2: README and LICENSE
+### Task 9.2: README and documentation
 
 **Files:**
 - Create: `README.md`
-- Create: `LICENSE`
+- Verify: `LICENSE` (already exists)
 
 - [ ] **Step 1: Create README**
 
-Quick start, installation, Claude Code hook configuration example, `stargate.toml` reference, CLI usage. Keep it concise.
+Sections:
+- What is stargate (one paragraph)
+- Quick start (install, create config, run server, configure Claude Code hook)
+- CLI reference (serve, hook, test, config, corpus — one table)
+- Configuration reference (key stargate.toml sections with examples)
+- How it works (one-paragraph pipeline overview)
+- Development (just recipes, running tests)
 
-- [ ] **Step 2: Create LICENSE**
+Keep it concise — link to spec for detailed documentation.
 
-Apache-2.0 license file.
+- [ ] **Step 2: Verify documented examples work**
+
+Run every CLI example in the README against the real binary. Verify
+output matches documented output. This prevents comment/code drift
+(lesson from M1–M8).
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add README.md LICENSE
-git commit -m "docs: add README and Apache-2.0 LICENSE"
+git commit -m "docs: add README with quick start and CLI reference"
 ```
 
-### Task 9.3: `stargate config dump` and `stargate config rules`
+### Task 9.3: `stargate config dump`, `config rules`, `config scopes`
 
 **Files:**
-- Modify: `cmd/stargate/main.go`
+- Modify: `cmd/stargate/config.go` (replace stubs)
+- Create: `cmd/stargate/config_test.go`
 
-- [ ] **Step 1: Implement remaining config subcommands**
+- [ ] **Step 1: Implement config dump**
 
-`config dump` — print resolved config as TOML. `config rules` — print rule summary table. `config scopes` — print scope values.
+`config dump` — loads config, validates, prints as TOML to stdout. Includes
+effective defaults (not just user-set values). Fails with exit 1 and clear
+error message on invalid config — never dumps partial state.
 
-- [ ] **Step 2: Test, commit**
+`config validate` — already implemented (loads and validates, exits 0/1).
+
+- [ ] **Step 2: Implement config rules**
+
+`config rules` — loads config, prints a summary table:
+```
+LEVEL  COMMAND    FLAGS       ARGS   SCOPE    REASON
+red    rm         -rf, -fr    /      —        destructive deletion of root
+green  git, ls    —           —      —        safe read-only commands
+yellow curl       —           —      —        network access requires review
+```
+
+- [ ] **Step 3: Implement config scopes**
+
+`config scopes` — loads config, prints defined scopes and their patterns.
+
+- [ ] **Step 4: Write tests**
+
+Test:
+- `config dump` with valid config → valid TOML output (round-trip parse)
+- `config dump` with invalid config → exit 1 with error
+- `config rules` → table includes all rule tiers
+- `config validate` → exit 0 for valid, exit 1 for invalid (already tested)
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git add cmd/
-git commit -m "feat(config): add config dump, rules, and scopes subcommands"
+git commit -m "feat(config): implement dump, rules, and scopes subcommands"
 ```

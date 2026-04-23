@@ -2603,4 +2603,4 @@ Run as `go test ./... -run TestCorpus`.
 | **M6: Agent Adapters + Feedback** | Claude Code adapter (pre-tool-use + post-tool-use), `--agent` and `--event` flags, tool_use_id → trace_id correlation, temp file handoff. |
 | **M7: Telemetry** | OTel SDK init, OTLP/HTTP exporters, structured logs, metrics, trace span tree with feedback spans, Grafana Cloud auth. |
 | **M8: Hardening** | Evasion test corpus, `/test` endpoint, `stargate test` CLI. |
-| **M9: Distribution** | Makefile with cross-compilation, README, example config, install script. |
+| **M9: Distribution** | Justfile with cross-compilation, README, example config, config subcommands. |
