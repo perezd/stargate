@@ -96,25 +96,6 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 }
 
-func TestStubEndpointsReturn501(t *testing.T) {
-	cfg := testConfig()
-	srv := mustNewServer(t, cfg)
-
-	endpoints := []struct{ method, path string }{
-		{"POST", "/test"},
-	}
-	for _, ep := range endpoints {
-		t.Run(ep.method+" "+ep.path, func(t *testing.T) {
-			req := httptest.NewRequest(ep.method, ep.path, nil)
-			w := httptest.NewRecorder()
-			srv.ServeHTTP(w, req)
-			if w.Code != http.StatusNotImplemented {
-				t.Errorf("status = %d, want %d", w.Code, http.StatusNotImplemented)
-			}
-		})
-	}
-}
-
 func TestFeedbackEndpointMissingFields(t *testing.T) {
 	cfg := testConfig()
 	srv := mustNewServer(t, cfg)
