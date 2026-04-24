@@ -15,11 +15,10 @@ func TestInit_CreatesConfig(t *testing.T) {
 		t.Fatalf("exit = %d, want 0", code)
 	}
 
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		t.Error("config file was not created")
+	info, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatalf("config file not created: %v", err)
 	}
-
-	info, _ := os.Stat(configPath)
 	if info.Size() < 1000 {
 		t.Errorf("config file too small (%d bytes), expected full default config", info.Size())
 	}
@@ -29,22 +28,20 @@ func TestInit_DoesNotOverwriteExistingConfig(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "stargate.toml")
 
-	// Write a custom config.
-	custom := `
-[server]
-listen = "127.0.0.1:9099"
-[classifier]
-default_decision = "yellow"
-`
-	os.WriteFile(configPath, []byte(custom), 0644)
+	custom := "[server]\nlisten = \"127.0.0.1:9099\"\n[classifier]\ndefault_decision = \"yellow\"\n"
+	if err := os.WriteFile(configPath, []byte(custom), 0644); err != nil {
+		t.Fatalf("write custom config: %v", err)
+	}
 
 	code := handleInit([]string{}, configPath, false)
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0", code)
 	}
 
-	// Verify the file was NOT overwritten.
-	content, _ := os.ReadFile(configPath)
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
 	if string(content) != custom {
 		t.Error("init overwrote existing config file")
 	}
@@ -54,40 +51,43 @@ func TestInit_ResetCorpus(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "stargate.toml")
 
-	// Create a fake corpus DB.
-	corpusDir := filepath.Join(homeDir(), ".local", "share", "stargate")
-	os.MkdirAll(corpusDir, 0755)
-	fakeDB := filepath.Join(corpusDir, "precedents.db")
-
-	// Only test if we can write to the corpus dir.
-	if err := os.WriteFile(fakeDB+".test-init", []byte("test"), 0644); err != nil {
-		t.Skip("cannot write to corpus directory")
+	// Config with corpus path pointing into the temp dir.
+	corpusPath := filepath.Join(dir, "corpus", "precedents.db")
+	cfg := "[server]\nlisten = \"127.0.0.1:9099\"\n[classifier]\ndefault_decision = \"yellow\"\n[corpus]\npath = \"" + corpusPath + "\"\n"
+	if err := os.WriteFile(configPath, []byte(cfg), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
 	}
-	os.Remove(fakeDB + ".test-init")
 
-	// Write a minimal valid config.
-	os.WriteFile(configPath, []byte(`
-[server]
-listen = "127.0.0.1:9099"
-[classifier]
-default_decision = "yellow"
-`), 0644)
+	// Create fake corpus files.
+	if err := os.MkdirAll(filepath.Dir(corpusPath), 0700); err != nil {
+		t.Fatalf("create corpus dir: %v", err)
+	}
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if err := os.WriteFile(corpusPath+suffix, []byte("test"), 0644); err != nil {
+			t.Fatalf("create corpus file: %v", err)
+		}
+	}
 
 	code := handleInit([]string{"--reset-corpus"}, configPath, false)
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0", code)
+	}
+
+	// Verify all corpus files removed.
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if _, err := os.Stat(corpusPath + suffix); !os.IsNotExist(err) {
+			t.Errorf("corpus file %s still exists after reset", corpusPath+suffix)
+		}
 	}
 }
 
 func TestInit_ResetTraces(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "stargate.toml")
-	os.WriteFile(configPath, []byte(`
-[server]
-listen = "127.0.0.1:9099"
-[classifier]
-default_decision = "yellow"
-`), 0644)
+	cfg := "[server]\nlisten = \"127.0.0.1:9099\"\n[classifier]\ndefault_decision = \"yellow\"\n"
+	if err := os.WriteFile(configPath, []byte(cfg), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	code := handleInit([]string{"--reset-traces"}, configPath, false)
 	if code != 0 {
@@ -98,12 +98,10 @@ default_decision = "yellow"
 func TestInit_ResetBoth(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "stargate.toml")
-	os.WriteFile(configPath, []byte(`
-[server]
-listen = "127.0.0.1:9099"
-[classifier]
-default_decision = "yellow"
-`), 0644)
+	cfg := "[server]\nlisten = \"127.0.0.1:9099\"\n[classifier]\ndefault_decision = \"yellow\"\n"
+	if err := os.WriteFile(configPath, []byte(cfg), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	code := handleInit([]string{"--reset"}, configPath, false)
 	if code != 0 {
@@ -145,5 +143,41 @@ func TestParseInitFlags_Individual(t *testing.T) {
 	}
 	if traces {
 		t.Error("--reset-corpus should not set traces=true")
+	}
+}
+
+func TestInit_IdempotentSecondRun(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "stargate", "stargate.toml")
+
+	// First run creates.
+	code := handleInit([]string{}, configPath, false)
+	if code != 0 {
+		t.Fatalf("first run exit = %d", code)
+	}
+
+	// Second run is idempotent.
+	code = handleInit([]string{}, configPath, false)
+	if code != 0 {
+		t.Fatalf("second run exit = %d", code)
+	}
+}
+
+func TestExpandHome(t *testing.T) {
+	home := homeDir()
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"~/foo", filepath.Join(home, "foo")},
+		{"~", home},
+		{"/absolute/path", "/absolute/path"},
+		{"relative/path", "relative/path"},
+	}
+	for _, tt := range tests {
+		got := expandHome(tt.input)
+		if got != tt.want {
+			t.Errorf("expandHome(%q) = %q, want %q", tt.input, got, tt.want)
+		}
 	}
 }

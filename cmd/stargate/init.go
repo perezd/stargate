@@ -46,13 +46,11 @@ func handleInit(args []string, configPath string, _ bool) int {
 	configCreated := false
 
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		// Create directory.
 		if err := os.MkdirAll(configDir, 0755); err != nil {
 			fmt.Fprintf(os.Stderr, "init: create config directory: %v\n", err)
 			return 1
 		}
 
-		// Write default config.
 		defaultCfg, err := defaultConfig.ReadFile("default-stargate.toml")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "init: read embedded config: %v\n", err)
@@ -65,47 +63,65 @@ func handleInit(args []string, configPath string, _ bool) int {
 		configCreated = true
 	}
 
+	// --- Validate config (needed before reset to resolve corpus.path) ---
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "init: config validation failed: %v\n", err)
+		return 1
+	}
+
 	// --- Corpus directory ---
-	corpusDir := filepath.Join(homeDir(), ".local", "share", "stargate")
-	if err := os.MkdirAll(corpusDir, 0755); err != nil {
+	// Use the configured corpus path (which may be customized), expanding ~.
+	corpusPath := expandHome(cfg.Corpus.Path)
+	corpusDir := filepath.Dir(corpusPath)
+	if err := os.MkdirAll(corpusDir, 0700); err != nil {
 		fmt.Fprintf(os.Stderr, "init: create corpus directory: %v\n", err)
 		return 1
 	}
 
 	// --- Reset corpus ---
 	if resetCorpus {
-		corpusPath := filepath.Join(corpusDir, "precedents.db")
-		if err := os.Remove(corpusPath); err != nil && !os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "init: remove corpus: %v\n", err)
-			return 1
+		removed := false
+		for _, suffix := range []string{"", "-wal", "-shm"} {
+			p := corpusPath + suffix
+			if err := os.Remove(p); err == nil {
+				removed = true
+			} else if !os.IsNotExist(err) {
+				fmt.Fprintf(os.Stderr, "init: remove %s: %v\n", p, err)
+				return 1
+			}
 		}
-		// Also remove WAL and SHM files.
-		os.Remove(corpusPath + "-wal")
-		os.Remove(corpusPath + "-shm")
-		fmt.Println("Corpus:  reset (database deleted)")
+		if removed {
+			fmt.Println("Corpus:  reset (database deleted)")
+		} else {
+			fmt.Println("Corpus:  reset (no database found)")
+		}
 	}
 
 	// --- Reset traces ---
 	if resetTraces {
 		traceDir, err := adapter.TraceDir()
-		if err == nil {
-			entries, _ := os.ReadDir(traceDir)
-			removed := 0
-			for _, e := range entries {
-				if !e.IsDir() {
-					os.Remove(filepath.Join(traceDir, e.Name()))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "init: resolve trace directory: %v\n", err)
+			return 1
+		}
+		entries, err := os.ReadDir(traceDir)
+		if err != nil && !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "init: read trace directory: %v\n", err)
+			return 1
+		}
+		removed := 0
+		for _, e := range entries {
+			if !e.IsDir() {
+				p := filepath.Join(traceDir, e.Name())
+				if err := os.Remove(p); err != nil {
+					fmt.Fprintf(os.Stderr, "init: remove trace %s: %v\n", p, err)
+				} else {
 					removed++
 				}
 			}
-			fmt.Printf("Traces:  reset (%d files removed)\n", removed)
 		}
-	}
-
-	// --- Validate config ---
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "init: config validation failed: %v\n", err)
-		return 1
+		fmt.Printf("Traces:  reset (%d files removed)\n", removed)
 	}
 
 	// --- Summary ---
@@ -154,3 +170,13 @@ func homeDir() string {
 	return home
 }
 
+// expandHome replaces a leading ~ or ~/ with the user's home directory.
+func expandHome(path string) string {
+	if path == "~" {
+		return homeDir()
+	}
+	if len(path) > 1 && path[:2] == "~/" {
+		return filepath.Join(homeDir(), path[2:])
+	}
+	return path
+}
