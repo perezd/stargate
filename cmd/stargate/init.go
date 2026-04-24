@@ -1,0 +1,187 @@
+package main
+
+import (
+	"embed"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+
+	"github.com/limbic-systems/stargate/internal/adapter"
+	"github.com/limbic-systems/stargate/internal/config"
+)
+
+//go:embed default-stargate.toml
+var defaultConfig embed.FS
+
+const initUsage = `Usage: stargate init [flags]
+
+Set up the stargate environment. Creates the config file and directories
+if they don't exist. Optionally resets data stores.
+
+Flags:
+  --reset-corpus    Delete the precedent corpus database
+  --reset-traces    Delete all trace files
+  --reset           Shorthand for --reset-corpus --reset-traces
+`
+
+func handleInit(args []string, configPath string, _ bool) int {
+	resetCorpus, resetTraces, err := parseInitFlags(args)
+	if err != nil {
+		if err == errShowHelp {
+			fmt.Print(initUsage)
+			return 0
+		}
+		fmt.Fprintf(os.Stderr, "init: %v\n", err)
+		return 1
+	}
+
+	// Resolve default config path if not specified.
+	if configPath == "" {
+		configPath = defaultConfigPath()
+	}
+
+	// --- Config file ---
+	configDir := filepath.Dir(configPath)
+	configCreated := false
+
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		if err := os.MkdirAll(configDir, 0755); err != nil {
+			fmt.Fprintf(os.Stderr, "init: create config directory: %v\n", err)
+			return 1
+		}
+
+		defaultCfg, err := defaultConfig.ReadFile("default-stargate.toml")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "init: read embedded config: %v\n", err)
+			return 1
+		}
+		if err := os.WriteFile(configPath, defaultCfg, 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "init: write config: %v\n", err)
+			return 1
+		}
+		configCreated = true
+	}
+
+	// --- Validate config (needed before reset to resolve corpus.path) ---
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "init: config validation failed: %v\n", err)
+		return 1
+	}
+
+	// --- Corpus directory ---
+	// Use the configured corpus path (which may be customized), expanding ~.
+	corpusPath := expandHome(cfg.Corpus.Path)
+	corpusDir := filepath.Dir(corpusPath)
+	if err := os.MkdirAll(corpusDir, 0700); err != nil {
+		fmt.Fprintf(os.Stderr, "init: create corpus directory: %v\n", err)
+		return 1
+	}
+
+	// --- Reset corpus ---
+	if resetCorpus {
+		removed := false
+		for _, suffix := range []string{"", "-wal", "-shm"} {
+			p := corpusPath + suffix
+			if err := os.Remove(p); err == nil {
+				removed = true
+			} else if !os.IsNotExist(err) {
+				fmt.Fprintf(os.Stderr, "init: remove %s: %v\n", p, err)
+				return 1
+			}
+		}
+		if removed {
+			fmt.Println("Corpus:  reset (database deleted)")
+		} else {
+			fmt.Println("Corpus:  reset (no database found)")
+		}
+	}
+
+	// --- Reset traces ---
+	if resetTraces {
+		traceDir, err := adapter.TraceDir()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "init: resolve trace directory: %v\n", err)
+			return 1
+		}
+		entries, err := os.ReadDir(traceDir)
+		if err != nil && !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "init: read trace directory: %v\n", err)
+			return 1
+		}
+		removed := 0
+		var removeErr error
+		for _, e := range entries {
+			if !e.IsDir() {
+				p := filepath.Join(traceDir, e.Name())
+				if err := os.Remove(p); err != nil {
+					fmt.Fprintf(os.Stderr, "init: remove trace %s: %v\n", p, err)
+					removeErr = err
+				} else {
+					removed++
+				}
+			}
+		}
+		fmt.Printf("Traces:  reset (%d files removed)\n", removed)
+		if removeErr != nil {
+			return 1
+		}
+	}
+
+	// --- Summary ---
+	if configCreated {
+		fmt.Printf("Config:  %s (created)\n", configPath)
+	} else {
+		fmt.Printf("Config:  %s (exists)\n", configPath)
+	}
+	if !resetCorpus {
+		fmt.Printf("Corpus:  %s (ready)\n", corpusDir)
+	}
+	fmt.Printf("Config valid. %d red, %d yellow, %d green rules loaded.\n",
+		len(cfg.Rules.Red), len(cfg.Rules.Yellow), len(cfg.Rules.Green))
+
+	return 0
+}
+
+func parseInitFlags(args []string) (resetCorpus, resetTraces bool, err error) {
+	for _, arg := range args {
+		switch arg {
+		case "--help", "-h":
+			return false, false, errShowHelp
+		case "--reset-corpus":
+			resetCorpus = true
+		case "--reset-traces":
+			resetTraces = true
+		case "--reset":
+			resetCorpus = true
+			resetTraces = true
+		default:
+			return false, false, fmt.Errorf("unknown flag %q", arg)
+		}
+	}
+	return resetCorpus, resetTraces, nil
+}
+
+func defaultConfigPath() string {
+	return filepath.Join(homeDir(), ".config", "stargate", "stargate.toml")
+}
+
+func homeDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "/tmp/stargate-" + strconv.Itoa(os.Getuid())
+	}
+	return home
+}
+
+// expandHome replaces a leading ~ or ~/ with the user's home directory.
+func expandHome(path string) string {
+	if path == "~" {
+		return homeDir()
+	}
+	if len(path) > 1 && path[:2] == "~/" {
+		return filepath.Join(homeDir(), path[2:])
+	}
+	return path
+}
