@@ -111,17 +111,22 @@ func handleInit(args []string, configPath string, _ bool) int {
 			return 1
 		}
 		removed := 0
+		var removeErr error
 		for _, e := range entries {
 			if !e.IsDir() {
 				p := filepath.Join(traceDir, e.Name())
 				if err := os.Remove(p); err != nil {
 					fmt.Fprintf(os.Stderr, "init: remove trace %s: %v\n", p, err)
+					removeErr = err
 				} else {
 					removed++
 				}
 			}
 		}
 		fmt.Printf("Traces:  reset (%d files removed)\n", removed)
+		if removeErr != nil {
+			return 1
+		}
 	}
 
 	// --- Summary ---
