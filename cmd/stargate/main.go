@@ -19,6 +19,7 @@ Usage:
   stargate [global flags] <subcommand> [subcommand args...]
 
 Subcommands:
+  init            Set up the stargate environment (config, directories)
   serve           Start the HTTP classification server
   hook            Run as a Claude Code pre-tool-use hook (reads JSON from stdin)
   test            Classify a command and print the decision
@@ -64,6 +65,7 @@ var handlers = map[string]subcommandHandler{
 	"test":   handleTest,
 	"config": handleConfig,
 	"corpus": handleCorpus,
+	"init":   handleInit,
 }
 
 // Subcommand handlers are in separate files:
