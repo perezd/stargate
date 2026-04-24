@@ -51,11 +51,11 @@ flowchart TD
 
 Stargate maintains a SQLite database of past classification decisions. When a new YELLOW command enters LLM review, similar past judgments are injected into the prompt as precedents. This gives the LLM consistency — if it allowed `curl -s https://api.example.com` yesterday, it sees that context today.
 
-The corpus stores structural signatures (command name + flags + context), not raw command strings, so `curl -s https://foo.com` and `curl -s https://bar.com` are recognized as the same pattern.
+Similarity matching in the corpus is based on argument-agnostic structural signatures (command name + flags + context), so `curl -s https://foo.com` and `curl -s https://bar.com` are recognized as the same pattern. For debugging and auditing, Stargate also stores a scrubbed version of the raw command (with secrets redacted).
 
 ### Feedback Loop
 
-After a command executes, the post-tool-use hook reports the outcome back to Stargate. If the user approved a YELLOW command, it's recorded as `user_approved` in the corpus — building a richer precedent base over time. The LLM sees these approvals as context but is not bound by them; it can still deny a command if the current invocation differs materially.
+After a command executes, the post-tool-use hook reports the outcome back to Stargate. If a YELLOW command was allowed to run — either because the user explicitly approved it or because LLM review approved it — it's recorded as `user_approved` in the corpus, building a richer precedent base over time. The LLM sees these prior allowed executions as context but is not bound by them; it can still deny a command if the current invocation differs materially.
 
 ### Scope-Based Trust
 
