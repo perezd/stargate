@@ -45,9 +45,8 @@ max_command_length = 65536
 # Exact strings (no wildcards) are matched literally.
 
 [scopes]
-github_owners = ["perezd", "my-org"]
+github_owners = ["my-org"]
 allowed_domains = ["*.example.com", "registry.npmjs.org", "*.googleapis.com"]
-# k8s_contexts = ["dev-*", "staging-*"]
 
 # ---------------------------------------------------------------------------
 # Rule Definitions
