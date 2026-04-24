@@ -2,58 +2,6 @@
 
 A bash command classifier for AI coding agents. Stargate sits between an AI coding agent and shell execution, parsing commands into ASTs, evaluating them against configurable rules, and escalating ambiguous commands to an LLM for review.
 
-## How It Works
-
-When an AI coding agent (like Claude Code) tries to run a shell command, Stargate intercepts it via a pre-tool-use hook and classifies it before execution:
-
-```mermaid
-flowchart TD
-    A[Agent wants to run a command] --> B[Parse shell AST]
-    B --> C[Walk AST → extract commands, flags, args]
-    C --> D{Rule Engine}
-    D -->|RED match| E[🔴 Block — command denied]
-    D -->|GREEN match| F[🟢 Allow — execute silently]
-    D -->|YELLOW match| G{LLM Review enabled?}
-    G -->|No| H[🟡 Ask — prompt the user]
-    G -->|Yes| I[Query Precedent Corpus]
-    I --> J[LLM reviews command + precedents + scopes]
-    J -->|allow| K[🟢 Allow — execute silently]
-    J -->|deny| L[🔴 Block — command denied]
-
-    K --> M[Post-tool-use hook]
-    F --> M
-    H -->|user approves| M
-    M --> N[Record feedback in corpus]
-
-    style E fill:#ff6b6b,color:#fff
-    style L fill:#ff6b6b,color:#fff
-    style F fill:#51cf66,color:#fff
-    style K fill:#51cf66,color:#fff
-    style H fill:#ffd43b,color:#333
-```
-
-### Classification Levels
-
-- **🔴 RED** — Hard block. Destructive commands (`rm -rf /`), privilege escalation (`sudo`), data exfiltration tools (`nc`, `socat`). No override, no LLM review. Blocked instantly.
-- **🟢 GREEN** — Safe to execute. Read-only commands (`ls`, `git status`, `cat`), trusted toolchains (`go build`, `cargo test`), and scope-matched operations (e.g., `curl` to a domain in your trusted `allowed_domains` list).
-- **🟡 YELLOW** — Ambiguous. Could be safe or dangerous depending on context. Two paths:
-  - **Without LLM**: the user is prompted to approve or deny.
-  - **With LLM** (`llm_review = true`): an LLM (Claude) reviews the command with full context — the parsed AST, the operator's scope definitions, and any similar past judgments from the precedent corpus — then decides allow or deny.
-
-### The Precedent Corpus
-
-Stargate maintains a SQLite database of past classification decisions. When a new YELLOW command enters LLM review, similar past judgments are injected into the prompt as precedents. This gives the LLM consistency — if it allowed `curl -s https://api.example.com` yesterday, it sees that context today.
-
-The corpus stores structural signatures (command name + flags + context), not raw command strings, so `curl -s https://foo.com` and `curl -s https://bar.com` are recognized as the same pattern.
-
-### Feedback Loop
-
-After a command executes, the post-tool-use hook reports the outcome back to Stargate. If the user approved a YELLOW command, it's recorded as `user_approved` in the corpus — building a richer precedent base over time. The LLM sees these approvals as context but is not bound by them; it can still deny a command if the current invocation differs materially.
-
-### Scope-Based Trust
-
-Rules can be bound to operator-defined scopes. For example, `curl` is GREEN when the target domain is in your `allowed_domains` list, but YELLOW (with LLM review) when it's not. Scopes live in `stargate.toml` — outside any repo — so they can't be manipulated by repo contents or prompt injection.
-
 ## Quick Start
 
 ### 1. Install
@@ -138,7 +86,6 @@ Add to your Claude Code hooks configuration (`.claude/settings.json`):
 
 | Subcommand | Description |
 |-----------|-------------|
-| `stargate init` | Set up the stargate environment (config, directories) |
 | `stargate serve` | Start the HTTP classification server |
 | `stargate hook` | Run as a Claude Code hook adapter (reads JSON from stdin) |
 | `stargate test <command>` | Dry-run classify a command for debugging |
@@ -148,6 +95,14 @@ Add to your Claude Code hooks configuration (`.claude/settings.json`):
 | `stargate corpus stats` | Print corpus statistics |
 
 Run `stargate <subcommand> --help` for detailed flags.
+
+## How It Works
+
+Every command goes through a classification pipeline: **parse** (shell AST via `mvdan.cc/sh/v3`) → **walk** (extract command names, flags, args, context) → **rules** (RED/GREEN/YELLOW matching with scope-bound conditions) → **corpus** (check precedent judgments) → **LLM review** (for ambiguous YELLOW commands) → **respond** (allow/ask/deny).
+
+- **GREEN** commands execute silently
+- **YELLOW** commands prompt the user for approval (or go to LLM review)
+- **RED** commands are blocked
 
 ## Security Notes
 
