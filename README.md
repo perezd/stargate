@@ -46,13 +46,13 @@ flowchart TD
 - **🟢 GREEN** — Safe to execute. Read-only commands (`ls`, `git status`, `cat`), trusted toolchains (`go build`, `cargo test`), and scope-matched operations (e.g., `curl` to a domain in your trusted `allowed_domains` list).
 - **🟡 YELLOW** — Ambiguous. Could be safe or dangerous depending on context. Two paths:
   - **Without LLM**: the user is prompted to approve or deny.
-  - **With LLM** (`llm_review = true`): an LLM (Claude) reviews the command with full context — the parsed AST, the operator's scope definitions, and any similar past judgments from the precedent corpus — then decides allow or deny.
+  - **With LLM** (`llm_review = true`): an LLM (Claude) reviews the command with full context — a structured AST summary, the scrubbed command string, the operator's scope definitions, and any similar past judgments from the precedent corpus — then decides allow or deny.
 
 ### The Precedent Corpus
 
 Stargate maintains a SQLite database of past classification decisions. When a new YELLOW command enters LLM review, similar past judgments are injected into the prompt as precedents. This gives the LLM consistency — if it allowed `curl -s https://api.example.com` yesterday, it sees that context today.
 
-Similarity matching in the corpus is based on argument-agnostic structural signatures (command name + flags + context), so `curl -s https://foo.com` and `curl -s https://bar.com` are recognized as the same pattern. For debugging and auditing, Stargate also stores a scrubbed version of the raw command (with secrets redacted).
+Similarity matching in the corpus is based on argument-agnostic structural signatures (command name + subcommand + flags + context), so `curl -s https://foo.com` and `curl -s https://bar.com` are recognized as the same pattern, while `git status` and `git push` are not. For debugging and auditing, Stargate also stores a scrubbed version of the raw command (with secrets redacted).
 
 ### Feedback Loop
 
