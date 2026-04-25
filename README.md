@@ -25,10 +25,10 @@ flowchart TD
     CC -->|cached allow| K
     CC -->|cached deny| L
 
-    F --> M[Command executes]
-    K --> M
-    H -->|user approves| M
-    M --> N[Post-tool-use hook]
+    F --> X[Command executes]
+    K --> Y[Command executes]
+    H -->|user approves| Y
+    Y --> N[Post-tool-use hook]
     N --> O[Record feedback in corpus]
 
     style E1 fill:#ff6b6b,color:#fff
