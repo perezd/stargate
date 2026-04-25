@@ -19,7 +19,10 @@ flowchart TD
     G -->|Yes| CA{Command\ncache?}
     CA -->|hit| CC[Return cached decision]
     CA -->|miss| I[Query precedent corpus\nfor similar past judgments]
-    I --> J[LLM reviews command\n+ precedents + scopes]
+    I --> S[Scrub secrets from command]
+    S --> J[LLM reviews scrubbed command\n+ AST + precedents + scopes]
+    J -->|request files| RF[Read referenced files\nwith path validation]
+    RF --> J
     J -->|allow| K[🟢 Allow]
     J -->|deny| L[🔴 Block]
     CC -->|cached allow| K
@@ -44,9 +47,10 @@ flowchart TD
 
 - **🔴 RED** — Hard block. Destructive commands (`rm -rf /`), privilege escalation (`sudo`), data exfiltration tools (`nc`, `socat`). No override, no LLM review. Blocked instantly.
 - **🟢 GREEN** — Safe to execute. Read-only commands (`ls`, `git status`, `cat`), trusted toolchains (`go build`, `cargo test`), and scope-matched operations (e.g., `curl` to a domain in your trusted `allowed_domains` list).
-- **🟡 YELLOW** — Ambiguous. Could be safe or dangerous depending on context. Two paths:
-  - **Without LLM**: the user is prompted to approve or deny.
-  - **With LLM** (`llm_review = true`): an LLM (Claude) reviews the command with full context — a structured AST summary, the scrubbed command string, the operator's scope definitions, and any similar past judgments from the precedent corpus — then decides allow or deny.
+- **🟡 YELLOW** — Ambiguous. Could be safe or dangerous depending on context. Three paths:
+  - **No LLM configured**: the user is prompted to approve or deny every time.
+  - **LLM configured but `llm_review = false`**: same as above — user prompt, no LLM call.
+  - **LLM configured + `llm_review = true`**: the command is scrubbed (secrets in env assignments and token patterns redacted), then an LLM (Claude) reviews it with full context — a structured AST summary, the scrubbed command, the operator's scope definitions, and similar past judgments from the precedent corpus. If `allow_file_retrieval` is enabled, the LLM can also request to inspect files referenced in the command (validated against `allowed_paths`/`denied_paths`) before rendering a final verdict.
 
 ### The Precedent Corpus
 
@@ -79,27 +83,13 @@ just build
 just install
 ```
 
-### 2. Create a config
+### 2. Initialize
 
-Create `~/.config/stargate/stargate.toml`:
-
-```toml
-[server]
-listen = "127.0.0.1:9099"
-
-[classifier]
-default_decision = "yellow"
-
-[[rules.red]]
-command = "rm"
-flags = ["-rf", "-fr"]
-args = ["/"]
-reason = "recursive force delete of root"
-
-[[rules.green]]
-commands = ["git", "ls", "cat", "echo", "pwd", "head", "tail", "wc"]
-reason = "safe read-only commands"
+```bash
+stargate init
 ```
+
+This creates `~/.config/stargate/stargate.toml` with a comprehensive default rule set (30 RED, 36 YELLOW, 17 GREEN rules) and the corpus directory. Edit the config to customize scopes and rules for your environment.
 
 > **Security:** `stargate.toml` MUST live outside any repository that stargate guards. A config inside a repo is writable by repo contents and therefore untrusted. The default path `~/.config/stargate/stargate.toml` is outside all repos.
 

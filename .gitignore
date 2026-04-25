@@ -4,3 +4,4 @@
 
 # Git worktrees
 .worktrees/
+/graphify-out/
