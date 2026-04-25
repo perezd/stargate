@@ -56,7 +56,7 @@ Similarity matching in the corpus is based on argument-agnostic structural signa
 
 ### Feedback Loop
 
-After a command executes, the post-tool-use hook reports the outcome back to Stargate. If a YELLOW command was allowed to run — either because the user explicitly approved it or because LLM review approved it — it's recorded as `user_approved` in the corpus, building a richer precedent base over time. The LLM sees these prior allowed executions as context but is not bound by them; it can still deny a command if the current invocation differs materially.
+When a YELLOW command executes (either user-approved or LLM-approved), the post-tool-use hook reports the outcome back to Stargate. The execution is recorded as `user_approved` in the corpus, building a richer precedent base over time. GREEN commands execute without feedback — they don't generate corpus entries. The LLM sees prior approved executions as context but is not bound by them; it can still deny a command if the current invocation differs materially.
 
 ### Scope-Based Trust
 
