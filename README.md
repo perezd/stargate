@@ -18,9 +18,9 @@ flowchart TD
     G -->|No| H[🟡 Ask — prompt the user]
     G -->|Yes| CA{Command\ncache?}
     CA -->|hit| CC[Return cached decision]
-    CA -->|miss| S[Scrub secrets from command]
-    S --> I[Query precedent corpus\nfor similar past judgments]
-    I --> J[LLM reviews scrubbed command\n+ AST + precedents + scopes]
+    CA -->|miss| I[Query precedent corpus\nfor similar past judgments]
+    I --> S[Scrub secrets from command]
+    S --> J[LLM reviews scrubbed command\n+ AST + precedents + scopes]
     J -->|request files| RF[Read referenced files\nwith path validation]
     RF --> J
     J -->|allow| K[🟢 Allow]
@@ -50,7 +50,7 @@ flowchart TD
 - **🟡 YELLOW** — Ambiguous. Could be safe or dangerous depending on context. Three paths:
   - **No LLM configured**: the user is prompted to approve or deny every time.
   - **LLM configured but `llm_review = false`**: same as above — user prompt, no LLM call.
-  - **LLM configured + `llm_review = true`**: the command is scrubbed (secrets in env assignments and token patterns redacted), then an LLM (Claude) reviews it with full context — a structured AST summary, the scrubbed command, the operator's scope definitions, and similar past judgments from the precedent corpus. The LLM can also request to inspect files referenced in the command (with path validation against `allowed_paths`/`denied_paths`) before rendering a final verdict.
+  - **LLM configured + `llm_review = true`**: the command is scrubbed (secrets in env assignments and token patterns redacted), then an LLM (Claude) reviews it with full context — a structured AST summary, the scrubbed command, the operator's scope definitions, and similar past judgments from the precedent corpus. If `allow_file_retrieval` is enabled, the LLM can also request to inspect files referenced in the command (validated against `allowed_paths`/`denied_paths`) before rendering a final verdict.
 
 ### The Precedent Corpus
 
