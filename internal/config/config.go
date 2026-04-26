@@ -517,6 +517,9 @@ func (cfg *Config) Validate() error {
 	if err := parseDuration("server.timeout", cfg.Server.Timeout); err != nil {
 		return err
 	}
+	if d, err := time.ParseDuration(cfg.Server.Timeout); err == nil && d <= 0 {
+		return fmt.Errorf("config: server.timeout must be positive; got %q", cfg.Server.Timeout)
+	}
 
 	// --- Parser ---
 	validDialects := map[string]bool{"bash": true, "posix": true, "mksh": true}
