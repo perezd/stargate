@@ -2,6 +2,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -124,11 +125,28 @@ func (s *Server) handleClassify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := s.clf.Classify(r.Context(), req)
+	ctx, cancel := applyTimeout(r.Context(), cfg.Server.Timeout)
+	defer cancel()
+
+	resp := s.clf.Classify(ctx, req)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck
+}
+
+// applyTimeout wraps ctx with a deadline parsed from a Go duration string
+// (e.g. "10s"). Returns the original context and a no-op cancel if the
+// timeout is empty, unparseable, or non-positive.
+func applyTimeout(ctx context.Context, timeout string) (context.Context, context.CancelFunc) {
+	if timeout == "" {
+		return ctx, func() {}
+	}
+	d, err := time.ParseDuration(timeout)
+	if err != nil || d <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, d)
 }
 
 func writeJSONError(w http.ResponseWriter, code int, msg string) {

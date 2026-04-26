@@ -58,7 +58,10 @@ func (s *Server) handleTest(w http.ResponseWriter, r *http.Request) {
 	classifyReq.DryRun = true
 	classifyReq.UseCache = req.UseCache
 
-	resp := s.clf.Classify(r.Context(), classifyReq)
+	ctx, cancel := applyTimeout(r.Context(), cfg.Server.Timeout)
+	defer cancel()
+
+	resp := s.clf.Classify(ctx, classifyReq)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

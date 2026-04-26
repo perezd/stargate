@@ -114,12 +114,21 @@ func handleServe(args []string, configPath string, verbose bool) int {
 			fmt.Fprintf(os.Stderr, "serve: close: %v\n", err)
 		}
 	}()
+	// Derive WriteTimeout from server.timeout so the HTTP server never
+	// severs the connection before the classify handler can write a JSON
+	// response. The 5s grace covers JSON encoding + network flush.
+	writeTimeout := 15 * time.Second
+	if cfg.Server.Timeout != "" {
+		if d, err := time.ParseDuration(cfg.Server.Timeout); err == nil && d > 0 {
+			writeTimeout = d + 5*time.Second
+		}
+	}
 	httpSrv := &http.Server{
 		Addr:              listenAddr,
 		Handler:           otelhttp.NewHandler(srv, "stargate"),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      15 * time.Second,
+		WriteTimeout:      writeTimeout,
 		IdleTimeout:       60 * time.Second,
 	}
 
