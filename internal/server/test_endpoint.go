@@ -1,13 +1,11 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/limbic-systems/stargate/internal/classifier"
 )
@@ -60,17 +58,7 @@ func (s *Server) handleTest(w http.ResponseWriter, r *http.Request) {
 	classifyReq.DryRun = true
 	classifyReq.UseCache = req.UseCache
 
-	ctx := r.Context()
-	cfg2 := s.cfg.Load()
-	if cfg2.Server.Timeout != "" {
-		if d, err := time.ParseDuration(cfg2.Server.Timeout); err == nil && d > 0 {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(ctx, d)
-			defer cancel()
-		}
-	}
-
-	resp := s.clf.Classify(ctx, classifyReq)
+	resp := s.clf.Classify(r.Context(), classifyReq)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
