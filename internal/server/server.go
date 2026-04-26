@@ -2,6 +2,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -124,7 +125,21 @@ func (s *Server) handleClassify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := s.clf.Classify(r.Context(), req)
+	// Apply server.timeout as a context deadline on the classify call.
+	// This ensures the LLM call is cancelled before the HTTP server's
+	// WriteTimeout fires — so we can return a proper JSON response
+	// instead of an empty response from a severed connection.
+	ctx := r.Context()
+	cfg2 := s.cfg.Load()
+	if cfg2.Server.Timeout != "" {
+		if d, err := time.ParseDuration(cfg2.Server.Timeout); err == nil && d > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, d)
+			defer cancel()
+		}
+	}
+
+	resp := s.clf.Classify(ctx, req)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
