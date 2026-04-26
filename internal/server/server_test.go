@@ -298,6 +298,20 @@ func TestClassifyInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestClassifyWithServerTimeout(t *testing.T) {
+	cfg := testConfig()
+	cfg.Server.Timeout = "5s"
+	srv := mustNewServer(t, cfg)
+
+	code, resp := postClassify(t, srv, `{"command":"git status"}`)
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", code)
+	}
+	if resp.Decision != "green" {
+		t.Errorf("decision = %q, want green", resp.Decision)
+	}
+}
+
 func TestClassifyTrailingData(t *testing.T) {
 	srv := mustNewServer(t, testConfig())
 
