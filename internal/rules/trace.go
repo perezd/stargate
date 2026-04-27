@@ -46,7 +46,7 @@ type ResolveDebug struct {
 	Resolved      bool     `json:"resolved"`
 	Error         string   `json:"error,omitempty"`
 	Scope         string   `json:"scope"`
-	ScopePatterns []string `json:"scope_patterns"`
+	ScopePatterns []string `json:"scope_patterns,omitempty"`
 	Matched       bool     `json:"matched"`
 }
 

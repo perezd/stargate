@@ -460,11 +460,6 @@ func handleCorpusRecent(args []string, configPath string, _ bool) int {
 		return 1
 	}
 
-	if len(entries) == 0 {
-		fmt.Println("No entries found.")
-		return 0
-	}
-
 	if *asJSON {
 		type jsonEntry struct {
 			ID         int64   `json:"id"`
@@ -489,6 +484,11 @@ func handleCorpusRecent(args []string, configPath string, _ bool) int {
 			fmt.Fprintf(os.Stderr, "corpus recent: encode json: %v\n", err)
 			return 1
 		}
+		return 0
+	}
+
+	if len(entries) == 0 {
+		fmt.Println("No entries found.")
 		return 0
 	}
 

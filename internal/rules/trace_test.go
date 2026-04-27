@@ -68,7 +68,7 @@ func TestEvaluateWithTrace_RedMatch(t *testing.T) {
 	}
 
 	result := engine.EvaluateWithTrace(context.Background(),
-		[]CommandInfo{{Name: "rm", Flags: []string{"-rf"}, Args: []string{"/"}},},
+		[]CommandInfo{{Name: "rm", Flags: []string{"-rf"}, Args: []string{"/"}}},
 		"rm -rf /", "",
 	)
 

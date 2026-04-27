@@ -6,7 +6,7 @@ import "github.com/limbic-systems/stargate/internal/rules"
 type DebugInfo struct {
 	ScrubbedCommand    string                 `json:"scrubbed_command"`
 	RuleTrace          []rules.RuleTraceEntry `json:"rule_trace"`
-	Cache              *CacheDebug            `json:"cache"`
+	Cache              *CacheDebug            `json:"cache,omitempty"`
 	PrecedentsInjected []PrecedentDebug       `json:"precedents_injected,omitempty"`
 	RenderedPrompts    *PromptDebug           `json:"rendered_prompts,omitempty"`
 	LLMRawResponse     string                 `json:"llm_raw_response,omitempty"`
