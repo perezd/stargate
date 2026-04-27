@@ -90,6 +90,7 @@ type ClassifyResponse struct {
 	Context       map[string]any     `json:"context"`
 	Corpus        *CorpusSummary     `json:"corpus"`
 	Version       string             `json:"version"`
+	Debug         *DebugInfo         `json:"-"`
 }
 
 // LLMReviewResult holds the result of an LLM review (populated in M4).
@@ -297,6 +298,7 @@ type classifyState struct {
 	cmds    []rules.CommandInfo
 	resp    *ClassifyResponse
 	traceID string
+	debug   *DebugInfo // non-nil when DryRun=true
 
 	// Lazily computed structural fields.
 	sigComputed   bool
@@ -374,6 +376,15 @@ func (c *Classifier) Classify(ctx context.Context, req ClassifyRequest) *Classif
 		return resp
 	}
 
+	// Debug fields are populated inline at each pipeline stage, guarded by
+	// state.debug != nil. No recover() — a panic in debug code should surface
+	// the same as any other bug, not be silently swallowed.
+	if req.DryRun {
+		resp.Debug = &DebugInfo{
+			ScrubbedCommand: c.scrubber.Command(req.Command),
+		}
+	}
+
 	// 1. Command length guard.
 	if c.maxCmdLen > 0 && len(req.Command) > c.maxCmdLen {
 		resp.Decision = "red"
@@ -410,6 +421,7 @@ func (c *Classifier) Classify(ctx context.Context, req ClassifyRequest) *Classif
 		cmds:    cmds,
 		resp:    resp,
 		traceID: traceID,
+		debug:   resp.Debug, // nil for non-DryRun
 	}
 
 	// 4. Rule engine evaluation.
@@ -417,7 +429,12 @@ func (c *Classifier) Classify(ctx context.Context, req ClassifyRequest) *Classif
 	// so they fail GREEN and fall to YELLOW/default. RED rules still fire for
 	// other commands in the same input (e.g., "$(echo rm); rm -rf /").
 	rulesStart := time.Now()
-	result := c.engine.Evaluate(ctx, cmds, req.Command, req.CWD)
+	var result *rules.Result
+	if req.DryRun {
+		result = c.engine.EvaluateWithTrace(ctx, cmds, req.Command, req.CWD)
+	} else {
+		result = c.engine.Evaluate(ctx, cmds, req.Command, req.CWD)
+	}
 	resp.Timing.RulesUs = time.Since(rulesStart).Microseconds()
 
 	// 5. Apply unresolvable_expansion policy.
@@ -441,6 +458,10 @@ func (c *Classifier) Classify(ctx context.Context, req ClassifyRequest) *Classif
 				break
 			}
 		}
+	}
+
+	if resp.Debug != nil {
+		resp.Debug.RuleTrace = result.Trace
 	}
 
 	resp.Decision = result.Decision
@@ -547,8 +568,18 @@ func (c *Classifier) reviewWithLLM(state *classifyState) *LLMReviewResult {
 	// explicitly wants to test cache behavior), allow reads. Cache writes
 	// are always skipped in dry-run via the guard in postProcess.
 	cacheAllowed := !state.req.DryRun || state.req.UseCache
+	if state.debug != nil {
+		state.debug.Cache = &CacheDebug{Checked: cacheAllowed}
+	}
 	if cacheAllowed {
 		if cached, hit := c.cmdCache.Lookup(state.req.Command, state.req.CWD); hit {
+			if state.debug != nil {
+				state.debug.Cache.Hit = true
+				state.debug.Cache.Entry = &CacheEntryDebug{
+					Decision: cached.Decision,
+					Action:   cached.Action,
+				}
+			}
 			result.Performed = false
 			result.Rounds = 0
 			result.Decision = cached.Decision
@@ -671,6 +702,18 @@ func (c *Classifier) reviewWithLLM(state *classifyState) *LLMReviewResult {
 			fmt.Fprintf(os.Stderr, "classifier: corpus lookup: %v\n", err)
 		} else {
 			precedentsFound = len(precedents)
+			if state.debug != nil && len(precedents) > 0 {
+				for _, p := range precedents {
+					state.debug.PrecedentsInjected = append(state.debug.PrecedentsInjected, PrecedentDebug{
+						ID:           fmt.Sprintf("%d", p.ID),
+						Decision:     p.Decision,
+						Similarity:   p.Similarity,
+						CommandNames: p.CommandNames,
+						Flags:        p.Flags,
+						AgeSeconds:   int64(time.Since(p.CreatedAt).Seconds()),
+					})
+				}
+			}
 			// Format precedents for prompt.
 			var fmtPrecedents []corpus.FormatPrecedent
 			for _, p := range precedents {
@@ -714,6 +757,12 @@ func (c *Classifier) reviewWithLLM(state *classifyState) *LLMReviewResult {
 	}
 
 	systemPrompt, userContent := llm.BuildPrompt(c.llmCfg.SystemPrompt, vars)
+	if state.debug != nil {
+		state.debug.RenderedPrompts = &PromptDebug{
+			System: systemPrompt,
+			User:   userContent,
+		}
+	}
 
 	// First LLM call.
 	llmReq := llm.ReviewRequest{
@@ -725,6 +774,9 @@ func (c *Classifier) reviewWithLLM(state *classifyState) *LLMReviewResult {
 	}
 
 	llmResp, err := c.llmProvider.Review(state.ctx, llmReq)
+	if state.debug != nil && llmResp.RawBody != "" {
+		state.debug.LLMRawResponse = llmResp.RawBody
+	}
 	if err != nil {
 		if errors.Is(err, llm.ErrRateLimited) {
 			result.Reasoning = truncateStr("LLM rate limit exceeded", c.maxReasonLen)
@@ -791,6 +843,15 @@ func (c *Classifier) reviewWithLLM(state *classifyState) *LLMReviewResult {
 
 	// Second LLM call.
 	llmResp2, err := c.llmProvider.Review(state.ctx, llmReq)
+	if state.debug != nil {
+		state.debug.RenderedPrompts = &PromptDebug{
+			System: systemPrompt2,
+			User:   userContent2,
+		}
+		if llmResp2.RawBody != "" {
+			state.debug.LLMRawResponse = llmResp2.RawBody
+		}
+	}
 	if err != nil {
 		result.Reasoning = truncateStr("Second LLM call failed", c.maxReasonLen)
 		return result

@@ -148,6 +148,70 @@ func (c *Corpus) ExportAll() ([]PrecedentEntry, error) {
 	return entries, nil
 }
 
+// RecentFilter controls the corpus recent query.
+type RecentFilter struct {
+	Limit    int
+	Decision string
+	Since    time.Duration
+}
+
+// RecentEntry is a compact row for the recent query.
+type RecentEntry struct {
+	ID         int64
+	Decision   string
+	RawCommand string
+	Reasoning  string
+	CreatedAt  time.Time
+}
+
+// Recent returns the most recent corpus entries, ordered by created_at DESC.
+func (c *Corpus) Recent(filter RecentFilter) ([]RecentEntry, error) {
+	query := `SELECT id, decision, raw_command, reasoning, created_at FROM precedents WHERE 1=1`
+	var args []any
+
+	if filter.Decision != "" {
+		query += ` AND decision = ?`
+		args = append(args, filter.Decision)
+	}
+	if filter.Since > 0 {
+		cutoff := time.Now().UTC().Add(-filter.Since).Format(time.RFC3339)
+		query += ` AND created_at >= ?`
+		args = append(args, cutoff)
+	}
+
+	query += ` ORDER BY created_at DESC`
+
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	query += ` LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := c.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("corpus.Recent: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []RecentEntry
+	for rows.Next() {
+		var e RecentEntry
+		var createdStr string
+		var rawCmd, reasoning sql.NullString
+		if err := rows.Scan(&e.ID, &e.Decision, &rawCmd, &reasoning, &createdStr); err != nil {
+			return nil, fmt.Errorf("corpus.Recent: scan: %w", err)
+		}
+		e.RawCommand = rawCmd.String
+		e.Reasoning = reasoning.String
+		if t, err := time.Parse(time.RFC3339, createdStr); err == nil {
+			e.CreatedAt = t
+		}
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
+}
+
 // ImportEntry inserts a single PrecedentEntry, bypassing rate limiting.
 // This is intended for admin import operations only.
 //

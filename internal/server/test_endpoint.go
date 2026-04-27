@@ -18,6 +18,14 @@ type TestRequest struct {
 	UseCache bool `json:"use_cache,omitempty"`
 }
 
+// testDebugResponse wraps ClassifyResponse to include the DebugInfo field in
+// JSON output. ClassifyResponse.Debug has json:"-" so it is never serialized
+// by the /classify handler; the /test handler uses this wrapper instead.
+type testDebugResponse struct {
+	*classifier.ClassifyResponse
+	Debug *classifier.DebugInfo `json:"debug,omitempty"`
+}
+
 // handleTest is a dry-run alias for /classify. It skips corpus writes,
 // cache writes, and feedback token generation. Cache reads are skipped by
 // default but can be enabled with use_cache=true in the request body.
@@ -65,5 +73,8 @@ func (s *Server) handleTest(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp) //nolint:errcheck
+	json.NewEncoder(w).Encode(testDebugResponse{
+		ClassifyResponse: resp,
+		Debug:            resp.Debug,
+	}) //nolint:errcheck
 }

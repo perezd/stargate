@@ -34,12 +34,13 @@ type compiledRule struct {
 
 // Result holds the outcome of rule evaluation.
 type Result struct {
-	Decision       string       // "red", "yellow", "green"
-	Action         string       // "block", "review", "allow"
+	Decision       string           // "red", "yellow", "green"
+	Action         string           // "block", "review", "allow"
 	Reason         string
-	Rule           *MatchedRule // nil if default decision
+	Rule           *MatchedRule     // nil if default decision
 	LLMReview      bool
-	MatchedCommand *CommandInfo // which command triggered (for RED)
+	MatchedCommand *CommandInfo     // which command triggered (for RED)
+	Trace          []RuleTraceEntry // populated by EvaluateWithTrace only
 }
 
 // MatchedRule identifies which rule matched.
@@ -176,10 +177,29 @@ func compileRules(rules []config.Rule, level string) ([]compiledRule, error) {
 
 // Evaluate runs the RED/GREEN/YELLOW pipeline and returns a classification.
 func (e *Engine) Evaluate(ctx context.Context, cmds []CommandInfo, rawCommand string, cwd string) *Result {
+	return e.evaluate(ctx, cmds, rawCommand, cwd, nil)
+}
+
+// EvaluateWithTrace runs the same pipeline as Evaluate but records a trace
+// entry for every rule tested. The trace is attached to the returned Result.
+// The evalContext is stack-local, so concurrent calls are safe.
+func (e *Engine) EvaluateWithTrace(ctx context.Context, cmds []CommandInfo, rawCommand string, cwd string) *Result {
+	ec := &evalContext{trace: true}
+	result := e.evaluate(ctx, cmds, rawCommand, cwd, ec)
+	result.Trace = ec.entries
+	return result
+}
+
+// evaluate is the internal implementation shared by Evaluate and EvaluateWithTrace.
+func (e *Engine) evaluate(ctx context.Context, cmds []CommandInfo, rawCommand string, cwd string, ec *evalContext) *Result {
 	// Phase 1: RED — any match returns immediately.
 	for i := range cmds {
 		for j := range e.red {
-			if e.matchRule(ctx, &e.red[j], &cmds[i], rawCommand, cwd) {
+			if ec != nil {
+				ec.currentLevel = "red"
+				ec.currentIndex = e.red[j].index
+			}
+			if e.matchRule(ctx, &e.red[j], &cmds[i], rawCommand, cwd, ec) {
 				return &Result{
 					Decision: "red",
 					Action:   "block",
@@ -201,7 +221,11 @@ func (e *Engine) Evaluate(ctx context.Context, cmds []CommandInfo, rawCommand st
 		allGreen := true
 		for i := range cmds {
 			for j := range e.green {
-				if e.matchRule(ctx, &e.green[j], &cmds[i], rawCommand, cwd) {
+				if ec != nil {
+					ec.currentLevel = "green"
+					ec.currentIndex = e.green[j].index
+				}
+				if e.matchRule(ctx, &e.green[j], &cmds[i], rawCommand, cwd, ec) {
 					greenMatched[i] = true
 					break
 				}
@@ -230,7 +254,11 @@ func (e *Engine) Evaluate(ctx context.Context, cmds []CommandInfo, rawCommand st
 			continue
 		}
 		for j := range e.yellow {
-			if e.matchRule(ctx, &e.yellow[j], &cmds[i], rawCommand, cwd) {
+			if ec != nil {
+				ec.currentLevel = "yellow"
+				ec.currentIndex = e.yellow[j].index
+			}
+			if e.matchRule(ctx, &e.yellow[j], &cmds[i], rawCommand, cwd, ec) {
 				llmReview := false
 				if e.yellow[j].rule.LLMReview != nil {
 					llmReview = *e.yellow[j].rule.LLMReview
@@ -273,20 +301,32 @@ func decisionToAction(decision string) string {
 
 // matchRule checks whether a compiled rule matches a command.
 // All specified fields must match (conjunction). Unspecified fields are wildcards.
-func (e *Engine) matchRule(ctx context.Context, cr *compiledRule, cmd *CommandInfo, rawCommand string, cwd string) bool {
+// When ec is non-nil and tracing is enabled, skip/match entries are recorded.
+func (e *Engine) matchRule(ctx context.Context, cr *compiledRule, cmd *CommandInfo, rawCommand string, cwd string, ec *evalContext) bool {
 	r := &cr.rule
+
+	tracing := ec != nil && ec.trace
 
 	// 1. command/commands
 	if r.Command != "" {
 		if cmd.Name == "" || cmd.Name != r.Command {
+			if tracing {
+				ec.appendSkipf(cr, cmd.Name, "command", "want %q, got %q", r.Command, cmd.Name)
+			}
 			return false
 		}
 	}
 	if len(r.Commands) > 0 {
 		if cmd.Name == "" {
+			if tracing {
+				ec.appendSkipf(cr, cmd.Name, "command", "want one of %v, got empty", r.Commands)
+			}
 			return false
 		}
 		if !slices.Contains(r.Commands, cmd.Name) {
+			if tracing {
+				ec.appendSkipf(cr, cmd.Name, "command", "want one of %v, got %q", r.Commands, cmd.Name)
+			}
 			return false
 		}
 	}
@@ -294,9 +334,15 @@ func (e *Engine) matchRule(ctx context.Context, cr *compiledRule, cmd *CommandIn
 	// 2. subcommands
 	if len(r.Subcommands) > 0 {
 		if cmd.Subcommand == "" {
+			if tracing {
+				ec.appendSkipf(cr, cmd.Name, "subcommands", "want one of %v, got empty", r.Subcommands)
+			}
 			return false
 		}
 		if !slices.Contains(r.Subcommands, cmd.Subcommand) {
+			if tracing {
+				ec.appendSkipf(cr, cmd.Name, "subcommands", "want one of %v, got %q", r.Subcommands, cmd.Subcommand)
+			}
 			return false
 		}
 	}
@@ -304,6 +350,9 @@ func (e *Engine) matchRule(ctx context.Context, cr *compiledRule, cmd *CommandIn
 	// 3. flags (two-phase matching)
 	if len(r.Flags) > 0 {
 		if !matchFlags(r.Flags, cmd.Flags) {
+			if tracing {
+				ec.appendSkipf(cr, cmd.Name, "flags", "want any of %v in %v", r.Flags, cmd.Flags)
+			}
 			return false
 		}
 	}
@@ -311,6 +360,9 @@ func (e *Engine) matchRule(ctx context.Context, cr *compiledRule, cmd *CommandIn
 	// 4. args (glob matching)
 	if len(r.Args) > 0 {
 		if !matchArgs(r.Args, cmd.Args) {
+			if tracing {
+				ec.appendSkipf(cr, cmd.Name, "args", "no arg in %v matched patterns %v", cmd.Args, r.Args)
+			}
 			return false
 		}
 	}
@@ -318,6 +370,9 @@ func (e *Engine) matchRule(ctx context.Context, cr *compiledRule, cmd *CommandIn
 	// 5. scope
 	if cr.normalizedScope != "" {
 		if !matchScope(cr.normalizedScope, cmd.Args) {
+			if tracing {
+				ec.appendSkipf(cr, cmd.Name, "scope", "no arg in %v within scope %q", cmd.Args, r.Scope)
+			}
 			return false
 		}
 	}
@@ -325,6 +380,9 @@ func (e *Engine) matchRule(ctx context.Context, cr *compiledRule, cmd *CommandIn
 	// 6. context
 	if r.Context != "" {
 		if !matchContext(r.Context, cmd) {
+			if tracing {
+				ec.appendSkipf(cr, cmd.Name, "context", "want context %q, not satisfied", r.Context)
+			}
 			return false
 		}
 	}
@@ -332,17 +390,42 @@ func (e *Engine) matchRule(ctx context.Context, cr *compiledRule, cmd *CommandIn
 	// 7. resolve — contextual trust check via scope-bound resolver.
 	if r.Resolve != nil {
 		if e.resolverProvider == nil || e.scopeMatcher == nil {
+			if tracing {
+				ec.appendResolveSkip(cr, cmd.Name, ResolveDebug{
+					Resolver: r.Resolve.Resolver,
+					Scope:    r.Resolve.Scope,
+					Error:    "no resolver/scope support",
+				})
+			}
 			return false // no resolver/scope support, fail-closed
 		}
 		resolver, ok := e.resolverProvider.Get(r.Resolve.Resolver)
 		if !ok {
+			if tracing {
+				ec.appendResolveSkip(cr, cmd.Name, ResolveDebug{
+					Resolver: r.Resolve.Resolver,
+					Scope:    r.Resolve.Scope,
+					Error:    "unknown resolver",
+				})
+			}
 			return false // unknown resolver, fail-closed
 		}
 		value, resolved, err := resolver(ctx, *cmd, cwd)
 		if err != nil || !resolved {
+			if tracing {
+				errStr := ""
+				if err != nil {
+					errStr = err.Error()
+				}
+				ec.appendResolveSkip(cr, cmd.Name, e.resolveDebug(r, value, resolved, errStr))
+			}
 			return false // unresolvable, fail-closed
 		}
-		if !e.scopeMatcher.Match(r.Resolve.Scope, value) {
+		matched := e.scopeMatcher.Match(r.Resolve.Scope, value)
+		if !matched {
+			if tracing {
+				ec.appendResolveSkip(cr, cmd.Name, e.resolveDebug(r, value, true, ""))
+			}
 			return false // value not in scope
 		}
 	}
@@ -350,11 +433,35 @@ func (e *Engine) matchRule(ctx context.Context, cr *compiledRule, cmd *CommandIn
 	// 8. pattern
 	if cr.pattern != nil {
 		if !cr.pattern.MatchString(rawCommand) {
+			if tracing {
+				ec.appendSkipf(cr, cmd.Name, "pattern", "pattern %q did not match %q", r.Pattern, rawCommand)
+			}
 			return false
 		}
 	}
 
+	if tracing {
+		ec.appendMatch(cr, cmd.Name)
+	}
 	return true
+}
+
+func (e *Engine) resolveDebug(r *config.Rule, value string, resolved bool, errStr string) ResolveDebug {
+	var patterns []string
+	if spg, ok := e.scopeMatcher.(scopePatternGetter); ok {
+		if all := spg.Scopes(); all != nil {
+			patterns = all[r.Resolve.Scope]
+		}
+	}
+	return ResolveDebug{
+		Resolver:      r.Resolve.Resolver,
+		ResolvedValue: value,
+		Resolved:      resolved,
+		Error:         errStr,
+		Scope:         r.Resolve.Scope,
+		ScopePatterns: patterns,
+		Matched:       false,
+	}
 }
 
 // isDecomposable returns true if the flag is a combined short flag: starts with

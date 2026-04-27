@@ -92,7 +92,9 @@ func (p *AnthropicProvider) reviewSDK(ctx context.Context, req ReviewRequest) (R
 		return ReviewResponse{}, fmt.Errorf("llm: empty response from Anthropic API")
 	}
 
-	return parseResponse(text)
+	parsed, err := parseResponse(text)
+	parsed.RawBody = text
+	return parsed, err
 }
 
 // reviewSubprocess calls `claude -p` with the prompt piped via stdin.
@@ -126,7 +128,9 @@ func (p *AnthropicProvider) reviewSubprocess(ctx context.Context, req ReviewRequ
 		return ReviewResponse{}, fmt.Errorf("llm: claude subprocess error: %w (stderr: %s)", err, stderr)
 	}
 
-	return parseResponse(string(output))
+	resp, err := parseResponse(string(output))
+	resp.RawBody = string(output)
+	return resp, err
 }
 
 // parseResponse extracts a ReviewResponse from the LLM's JSON output.

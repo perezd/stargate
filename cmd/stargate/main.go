@@ -23,6 +23,7 @@ Subcommands:
   serve           Start the HTTP classification server
   hook            Run as a Claude Code pre-tool-use hook (reads JSON from stdin)
   test            Classify a command and print the decision
+  explain         Pretty-print the full debug trace for a command
   config          Config management (e.g. config validate)
   corpus          Manage the precedent corpus
 
@@ -60,12 +61,13 @@ type subcommandHandler func(args []string, configPath string, verbose bool) int
 
 // handlers maps subcommand names to their handler functions.
 var handlers = map[string]subcommandHandler{
-	"serve":  handleServe,
-	"hook":   handleHook,
-	"test":   handleTest,
-	"config": handleConfig,
-	"corpus": handleCorpus,
-	"init":   handleInit,
+	"serve":   handleServe,
+	"hook":    handleHook,
+	"test":    handleTest,
+	"explain": handleExplain,
+	"config":  handleConfig,
+	"corpus":  handleCorpus,
+	"init":    handleInit,
 }
 
 // Subcommand handlers are in separate files:
