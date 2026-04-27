@@ -233,3 +233,47 @@ func TestTest_ContentType(t *testing.T) {
 		t.Errorf("Content-Type = %q, want application/json", ct)
 	}
 }
+
+func TestTest_DebugPopulated(t *testing.T) {
+	srv := mustNewServer(t, testConfig())
+	w := postTest(t, srv, `{"command": "ls"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	debug, ok := resp["debug"]
+	if !ok {
+		t.Fatal("response missing debug field")
+	}
+	debugMap, ok := debug.(map[string]any)
+	if !ok {
+		t.Fatal("debug is not an object")
+	}
+	if _, ok := debugMap["scrubbed_command"]; !ok {
+		t.Error("debug missing scrubbed_command")
+	}
+	if _, ok := debugMap["rule_trace"]; !ok {
+		t.Error("debug missing rule_trace")
+	}
+}
+
+func TestClassify_NoDebugField(t *testing.T) {
+	srv := mustNewServer(t, testConfig())
+	req := httptest.NewRequest("POST", "/classify", bytes.NewBufferString(`{"command":"ls"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, ok := raw["debug"]; ok {
+		t.Error("/classify response should not contain debug field")
+	}
+}
