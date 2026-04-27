@@ -1,0 +1,70 @@
+package rules
+
+import "github.com/limbic-systems/stargate/internal/config"
+
+// RuleTraceEntry records the result of matching one rule against one command.
+type RuleTraceEntry struct {
+	Level         string        `json:"level"`
+	Index         int           `json:"index"`
+	Rule          RuleSnapshot  `json:"rule"`
+	CommandTested string        `json:"command_tested"`
+	Result        string        `json:"result"` // "match" or "skip"
+	FailedStep    string        `json:"failed_step,omitempty"`
+	Detail        string        `json:"detail,omitempty"`
+	ResolveDetail *ResolveDebug `json:"resolve_detail,omitempty"`
+}
+
+// RuleSnapshot is a JSON-safe copy of a rule definition for debug output.
+type RuleSnapshot struct {
+	Command     string       `json:"command,omitempty"`
+	Commands    []string     `json:"commands,omitempty"`
+	Subcommands []string     `json:"subcommands,omitempty"`
+	Flags       []string     `json:"flags,omitempty"`
+	Args        []string     `json:"args,omitempty"`
+	Pattern     string       `json:"pattern,omitempty"`
+	Scope       string       `json:"scope,omitempty"`
+	Context     string       `json:"context,omitempty"`
+	Resolve     *ResolveSnap `json:"resolve,omitempty"`
+	LLMReview   *bool        `json:"llm_review,omitempty"`
+	Reason      string       `json:"reason"`
+}
+
+// ResolveSnap is a JSON-safe snapshot of a rule's resolve configuration.
+type ResolveSnap struct {
+	Resolver string `json:"resolver"`
+	Scope    string `json:"scope"`
+}
+
+// ResolveDebug holds the runtime outcome of a resolve step for debug output.
+type ResolveDebug struct {
+	Resolver      string   `json:"resolver"`
+	ResolvedValue string   `json:"resolved_value,omitempty"`
+	Resolved      bool     `json:"resolved"`
+	Error         string   `json:"error,omitempty"`
+	Scope         string   `json:"scope"`
+	ScopePatterns []string `json:"scope_patterns"`
+	Matched       bool     `json:"matched"`
+}
+
+// snapshotFromRule builds a JSON-safe RuleSnapshot from a config.Rule.
+func snapshotFromRule(r config.Rule) RuleSnapshot {
+	snap := RuleSnapshot{
+		Command:     r.Command,
+		Commands:    r.Commands,
+		Subcommands: r.Subcommands,
+		Flags:       r.Flags,
+		Args:        r.Args,
+		Pattern:     r.Pattern,
+		Scope:       r.Scope,
+		Context:     r.Context,
+		LLMReview:   r.LLMReview,
+		Reason:      r.Reason,
+	}
+	if r.Resolve != nil {
+		snap.Resolve = &ResolveSnap{
+			Resolver: r.Resolve.Resolver,
+			Scope:    r.Resolve.Scope,
+		}
+	}
+	return snap
+}
