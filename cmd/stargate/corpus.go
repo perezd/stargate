@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,6 +22,7 @@ Inspect, search, and manage the precedent corpus.
 
 Actions:
   stats                Print corpus statistics
+  recent               List recent corpus entries
   search <command>     Search precedents by command string
   inspect <id>         Show full details of an entry
   invalidate <id>      Remove an entry by ID
@@ -42,6 +44,8 @@ func handleCorpus(args []string, configPath string, verbose bool) int {
 	switch args[0] {
 	case "stats":
 		return handleCorpusStats(args[1:], configPath, verbose)
+	case "recent":
+		return handleCorpusRecent(args[1:], configPath, verbose)
 	case "search":
 		return handleCorpusSearch(args[1:], configPath, verbose)
 	case "inspect":
@@ -416,6 +420,131 @@ func handleCorpusImport(args []string, configPath string, _ bool) int {
 
 	fmt.Printf("Imported %d entries.\n", imported)
 	return 0
+}
+
+func handleCorpusRecent(args []string, configPath string, _ bool) int {
+	fs := flag.NewFlagSet("corpus recent", flag.ContinueOnError)
+	limit := fs.Int("limit", 20, "maximum number of entries to return")
+	decision := fs.String("decision", "", "filter by decision (allow, deny, user_approved)")
+	since := fs.String("since", "", "only show entries newer than this duration (e.g. 24h, 7d)")
+	asJSON := fs.Bool("json", false, "output as JSON array")
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "corpus recent: %v\n", err)
+		return 1
+	}
+
+	filter := corpus.RecentFilter{
+		Limit:    *limit,
+		Decision: *decision,
+	}
+
+	if *since != "" {
+		d, err := time.ParseDuration(*since)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "corpus recent: invalid --since value %q: %v\n", *since, err)
+			return 1
+		}
+		filter.Since = d
+	}
+
+	c, _, err := openCorpusDB(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "corpus recent: %v\n", err)
+		return 1
+	}
+	defer c.Close()
+
+	entries, err := c.Recent(filter)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "corpus recent: %v\n", err)
+		return 1
+	}
+
+	if len(entries) == 0 {
+		fmt.Println("No entries found.")
+		return 0
+	}
+
+	if *asJSON {
+		type jsonEntry struct {
+			ID         int64   `json:"id"`
+			Decision   string  `json:"decision"`
+			Command    string  `json:"command"`
+			Reason     string  `json:"reason"`
+			AgeSeconds float64 `json:"age_seconds"`
+		}
+		out := make([]jsonEntry, len(entries))
+		for i, e := range entries {
+			out[i] = jsonEntry{
+				ID:         e.ID,
+				Decision:   e.Decision,
+				Command:    e.RawCommand,
+				Reason:     e.Reasoning,
+				AgeSeconds: time.Since(e.CreatedAt).Seconds(),
+			}
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(out); err != nil {
+			fmt.Fprintf(os.Stderr, "corpus recent: encode json: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
+	// Table output.
+	fmt.Printf("%-6s  %-5s  %-3s  %-40s  %s\n", "ID", "AGE", "DEC", "CMD", "REASON")
+	fmt.Println(strings.Repeat("-", 80))
+	for _, e := range entries {
+		age := formatAgeCompact(time.Since(e.CreatedAt))
+		dec := abbreviateDecision(e.Decision)
+		cmd := truncate(e.RawCommand, 40)
+		reason := truncate(e.Reasoning, 30)
+		fmt.Printf("%-6d  %-5s  %-3s  %-40s  %s\n", e.ID, age, dec, cmd, reason)
+	}
+
+	return 0
+}
+
+// formatAgeCompact returns a compact age string like "5s", "3m", "2h", "1d".
+func formatAgeCompact(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
+}
+
+// abbreviateDecision returns a 3-letter abbreviation for a decision string.
+func abbreviateDecision(d string) string {
+	switch d {
+	case "allow", "user_approved":
+		return "ALW"
+	case "deny":
+		return "DNY"
+	default:
+		if len(d) >= 3 {
+			return strings.ToUpper(d[:3])
+		}
+		return strings.ToUpper(d)
+	}
+}
+
+// truncate shortens s to at most n runes, appending "..." if truncated.
+func truncate(s string, n int) string {
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	if n <= 3 {
+		return string(runes[:n])
+	}
+	return string(runes[:n-3]) + "..."
 }
 
 // formatAge returns a human-readable age string.
