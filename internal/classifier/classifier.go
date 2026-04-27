@@ -774,6 +774,9 @@ func (c *Classifier) reviewWithLLM(state *classifyState) *LLMReviewResult {
 	}
 
 	llmResp, err := c.llmProvider.Review(state.ctx, llmReq)
+	if state.debug != nil && llmResp.RawBody != "" {
+		state.debug.LLMRawResponse = llmResp.RawBody
+	}
 	if err != nil {
 		if errors.Is(err, llm.ErrRateLimited) {
 			result.Reasoning = truncateStr("LLM rate limit exceeded", c.maxReasonLen)
@@ -782,9 +785,6 @@ func (c *Classifier) reviewWithLLM(state *classifyState) *LLMReviewResult {
 		}
 		// Fail-closed: fall back to ask user.
 		return result
-	}
-	if state.debug != nil {
-		state.debug.LLMRawResponse = llmResp.RawBody
 	}
 
 	// If verdict, we're done. Scrub reasoning/risk_factors — the LLM may
@@ -843,16 +843,18 @@ func (c *Classifier) reviewWithLLM(state *classifyState) *LLMReviewResult {
 
 	// Second LLM call.
 	llmResp2, err := c.llmProvider.Review(state.ctx, llmReq)
-	if err != nil {
-		result.Reasoning = truncateStr("Second LLM call failed", c.maxReasonLen)
-		return result
-	}
 	if state.debug != nil {
 		state.debug.RenderedPrompts = &PromptDebug{
 			System: systemPrompt2,
 			User:   userContent2,
 		}
-		state.debug.LLMRawResponse = llmResp2.RawBody
+		if llmResp2.RawBody != "" {
+			state.debug.LLMRawResponse = llmResp2.RawBody
+		}
+	}
+	if err != nil {
+		result.Reasoning = truncateStr("Second LLM call failed", c.maxReasonLen)
+		return result
 	}
 
 	// Second call MUST return a verdict — another file request → deny.

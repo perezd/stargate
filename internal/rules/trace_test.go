@@ -141,7 +141,7 @@ func TestEvaluateWithTrace_SkipDetail(t *testing.T) {
 	}
 }
 
-func TestEvaluate_NoTraceAllocations(t *testing.T) {
+func TestEvaluate_NoTrace(t *testing.T) {
 	cfg := testConfig(
 		[]config.Rule{{Command: "rm", Reason: "dangerous"}},
 		[]config.Rule{{Command: "ls", Reason: "safe"}},

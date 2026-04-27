@@ -204,7 +204,9 @@ func (c *Corpus) Recent(filter RecentFilter) ([]RecentEntry, error) {
 		}
 		e.RawCommand = rawCmd.String
 		e.Reasoning = reasoning.String
-		e.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
+		if t, err := time.Parse(time.RFC3339, createdStr); err == nil {
+			e.CreatedAt = t
+		}
 		entries = append(entries, e)
 	}
 	return entries, rows.Err()
