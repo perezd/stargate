@@ -82,9 +82,11 @@ type evalContext struct {
 	currentIndex int
 }
 
-// appendSkip records a rule that was skipped because a match step failed.
+// appendSkipf records a rule that was skipped because a match step failed.
+// The format string and args are only evaluated when tracing is active,
+// avoiding fmt.Sprintf allocations on the /classify hot path.
 // No-op when ec is nil or tracing is disabled.
-func (ec *evalContext) appendSkip(cr *compiledRule, cmdName, failedStep, detail string) {
+func (ec *evalContext) appendSkipf(cr *compiledRule, cmdName, failedStep, format string, args ...any) {
 	if ec == nil || !ec.trace {
 		return
 	}
@@ -95,7 +97,7 @@ func (ec *evalContext) appendSkip(cr *compiledRule, cmdName, failedStep, detail 
 		CommandTested: cmdName,
 		Result:        "skip",
 		FailedStep:    failedStep,
-		Detail:        detail,
+		Detail:        fmt.Sprintf(format, args...),
 	})
 }
 

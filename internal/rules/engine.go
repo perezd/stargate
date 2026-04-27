@@ -308,17 +308,17 @@ func (e *Engine) matchRule(ctx context.Context, cr *compiledRule, cmd *CommandIn
 	// 1. command/commands
 	if r.Command != "" {
 		if cmd.Name == "" || cmd.Name != r.Command {
-			ec.appendSkip(cr, cmd.Name, "command", fmt.Sprintf("want %q, got %q", r.Command, cmd.Name))
+			ec.appendSkipf(cr, cmd.Name, "command", "want %q, got %q", r.Command, cmd.Name)
 			return false
 		}
 	}
 	if len(r.Commands) > 0 {
 		if cmd.Name == "" {
-			ec.appendSkip(cr, cmd.Name, "command", fmt.Sprintf("want one of %v, got empty", r.Commands))
+			ec.appendSkipf(cr, cmd.Name, "command", "want one of %v, got empty", r.Commands)
 			return false
 		}
 		if !slices.Contains(r.Commands, cmd.Name) {
-			ec.appendSkip(cr, cmd.Name, "command", fmt.Sprintf("want one of %v, got %q", r.Commands, cmd.Name))
+			ec.appendSkipf(cr, cmd.Name, "command", "want one of %v, got %q", r.Commands, cmd.Name)
 			return false
 		}
 	}
@@ -326,11 +326,11 @@ func (e *Engine) matchRule(ctx context.Context, cr *compiledRule, cmd *CommandIn
 	// 2. subcommands
 	if len(r.Subcommands) > 0 {
 		if cmd.Subcommand == "" {
-			ec.appendSkip(cr, cmd.Name, "subcommands", fmt.Sprintf("want one of %v, got empty", r.Subcommands))
+			ec.appendSkipf(cr, cmd.Name, "subcommands", "want one of %v, got empty", r.Subcommands)
 			return false
 		}
 		if !slices.Contains(r.Subcommands, cmd.Subcommand) {
-			ec.appendSkip(cr, cmd.Name, "subcommands", fmt.Sprintf("want one of %v, got %q", r.Subcommands, cmd.Subcommand))
+			ec.appendSkipf(cr, cmd.Name, "subcommands", "want one of %v, got %q", r.Subcommands, cmd.Subcommand)
 			return false
 		}
 	}
@@ -338,7 +338,7 @@ func (e *Engine) matchRule(ctx context.Context, cr *compiledRule, cmd *CommandIn
 	// 3. flags (two-phase matching)
 	if len(r.Flags) > 0 {
 		if !matchFlags(r.Flags, cmd.Flags) {
-			ec.appendSkip(cr, cmd.Name, "flags", fmt.Sprintf("want any of %v in %v", r.Flags, cmd.Flags))
+			ec.appendSkipf(cr, cmd.Name, "flags", "want any of %v in %v", r.Flags, cmd.Flags)
 			return false
 		}
 	}
@@ -346,7 +346,7 @@ func (e *Engine) matchRule(ctx context.Context, cr *compiledRule, cmd *CommandIn
 	// 4. args (glob matching)
 	if len(r.Args) > 0 {
 		if !matchArgs(r.Args, cmd.Args) {
-			ec.appendSkip(cr, cmd.Name, "args", fmt.Sprintf("no arg in %v matched patterns %v", cmd.Args, r.Args))
+			ec.appendSkipf(cr, cmd.Name, "args", "no arg in %v matched patterns %v", cmd.Args, r.Args)
 			return false
 		}
 	}
@@ -354,7 +354,7 @@ func (e *Engine) matchRule(ctx context.Context, cr *compiledRule, cmd *CommandIn
 	// 5. scope
 	if cr.normalizedScope != "" {
 		if !matchScope(cr.normalizedScope, cmd.Args) {
-			ec.appendSkip(cr, cmd.Name, "scope", fmt.Sprintf("no arg in %v within scope %q", cmd.Args, r.Scope))
+			ec.appendSkipf(cr, cmd.Name, "scope", "no arg in %v within scope %q", cmd.Args, r.Scope)
 			return false
 		}
 	}
@@ -362,7 +362,7 @@ func (e *Engine) matchRule(ctx context.Context, cr *compiledRule, cmd *CommandIn
 	// 6. context
 	if r.Context != "" {
 		if !matchContext(r.Context, cmd) {
-			ec.appendSkip(cr, cmd.Name, "context", fmt.Sprintf("want context %q, not satisfied", r.Context))
+			ec.appendSkipf(cr, cmd.Name, "context", "want context %q, not satisfied", r.Context)
 			return false
 		}
 	}
@@ -370,58 +370,42 @@ func (e *Engine) matchRule(ctx context.Context, cr *compiledRule, cmd *CommandIn
 	// 7. resolve — contextual trust check via scope-bound resolver.
 	if r.Resolve != nil {
 		if e.resolverProvider == nil || e.scopeMatcher == nil {
-			ec.appendResolveSkip(cr, cmd.Name, ResolveDebug{
-				Resolver: r.Resolve.Resolver,
-				Scope:    r.Resolve.Scope,
-				Error:    "no resolver/scope support",
-			})
+			if ec != nil && ec.trace {
+				ec.appendResolveSkip(cr, cmd.Name, ResolveDebug{
+					Resolver: r.Resolve.Resolver,
+					Scope:    r.Resolve.Scope,
+					Error:    "no resolver/scope support",
+				})
+			}
 			return false // no resolver/scope support, fail-closed
 		}
 		resolver, ok := e.resolverProvider.Get(r.Resolve.Resolver)
 		if !ok {
-			ec.appendResolveSkip(cr, cmd.Name, ResolveDebug{
-				Resolver: r.Resolve.Resolver,
-				Scope:    r.Resolve.Scope,
-				Error:    "unknown resolver",
-			})
+			if ec != nil && ec.trace {
+				ec.appendResolveSkip(cr, cmd.Name, ResolveDebug{
+					Resolver: r.Resolve.Resolver,
+					Scope:    r.Resolve.Scope,
+					Error:    "unknown resolver",
+				})
+			}
 			return false // unknown resolver, fail-closed
 		}
 		value, resolved, err := resolver(ctx, *cmd, cwd)
-
-		// Build scope patterns for debug output.
-		var scopePatterns []string
-		if spg, ok := e.scopeMatcher.(scopePatternGetter); ok {
-			if allScopes := spg.Scopes(); allScopes != nil {
-				scopePatterns = allScopes[r.Resolve.Scope]
-			}
-		}
-
 		if err != nil || !resolved {
-			errStr := ""
-			if err != nil {
-				errStr = err.Error()
+			if ec != nil && ec.trace {
+				errStr := ""
+				if err != nil {
+					errStr = err.Error()
+				}
+				ec.appendResolveSkip(cr, cmd.Name, e.resolveDebug(r, value, resolved, errStr))
 			}
-			ec.appendResolveSkip(cr, cmd.Name, ResolveDebug{
-				Resolver:      r.Resolve.Resolver,
-				ResolvedValue: value,
-				Resolved:      resolved,
-				Error:         errStr,
-				Scope:         r.Resolve.Scope,
-				ScopePatterns: scopePatterns,
-				Matched:       false,
-			})
 			return false // unresolvable, fail-closed
 		}
 		matched := e.scopeMatcher.Match(r.Resolve.Scope, value)
 		if !matched {
-			ec.appendResolveSkip(cr, cmd.Name, ResolveDebug{
-				Resolver:      r.Resolve.Resolver,
-				ResolvedValue: value,
-				Resolved:      true,
-				Scope:         r.Resolve.Scope,
-				ScopePatterns: scopePatterns,
-				Matched:       false,
-			})
+			if ec != nil && ec.trace {
+				ec.appendResolveSkip(cr, cmd.Name, e.resolveDebug(r, value, true, ""))
+			}
 			return false // value not in scope
 		}
 	}
@@ -429,13 +413,31 @@ func (e *Engine) matchRule(ctx context.Context, cr *compiledRule, cmd *CommandIn
 	// 8. pattern
 	if cr.pattern != nil {
 		if !cr.pattern.MatchString(rawCommand) {
-			ec.appendSkip(cr, cmd.Name, "pattern", fmt.Sprintf("pattern %q did not match %q", r.Pattern, rawCommand))
+			ec.appendSkipf(cr, cmd.Name, "pattern", "pattern %q did not match %q", r.Pattern, rawCommand)
 			return false
 		}
 	}
 
 	ec.appendMatch(cr, cmd.Name)
 	return true
+}
+
+func (e *Engine) resolveDebug(r *config.Rule, value string, resolved bool, errStr string) ResolveDebug {
+	var patterns []string
+	if spg, ok := e.scopeMatcher.(scopePatternGetter); ok {
+		if all := spg.Scopes(); all != nil {
+			patterns = all[r.Resolve.Scope]
+		}
+	}
+	return ResolveDebug{
+		Resolver:      r.Resolve.Resolver,
+		ResolvedValue: value,
+		Resolved:      resolved,
+		Error:         errStr,
+		Scope:         r.Resolve.Scope,
+		ScopePatterns: patterns,
+		Matched:       false,
+	}
 }
 
 // isDecomposable returns true if the flag is a combined short flag: starts with
