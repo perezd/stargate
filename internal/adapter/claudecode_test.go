@@ -92,8 +92,8 @@ func TestHandlePreToolUse_BashAllow(t *testing.T) {
 	if out.HookSpecificOutput.PermissionDecision != "allow" {
 		t.Errorf("decision: got %q, want %q", out.HookSpecificOutput.PermissionDecision, "allow")
 	}
-	if out.HookSpecificOutput.PermissionDecisionReason != "safe command" {
-		t.Errorf("reason: got %q, want %q", out.HookSpecificOutput.PermissionDecisionReason, "safe command")
+	if out.HookSpecificOutput.PermissionDecisionReason != "[stargate] safe command" {
+		t.Errorf("reason: got %q, want %q", out.HookSpecificOutput.PermissionDecisionReason, "[stargate] safe command")
 	}
 }
 

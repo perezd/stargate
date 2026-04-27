@@ -294,7 +294,7 @@ func writeClassifyResponse(stdout io.Writer, stderr io.Writer, resp *ClassifyRes
 		HookSpecificOutput: &hookSpecificOutput{
 			HookEventName:            "PreToolUse",
 			PermissionDecision:       decision,
-			PermissionDecisionReason: resp.Reason,
+			PermissionDecisionReason: "[stargate] " + resp.Reason,
 		},
 	}
 
