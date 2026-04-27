@@ -231,6 +231,11 @@ commands = ["ls", "cat", "head", "tail", "wc", "sort", "uniq", "grep", "rg",
 reason = "Read-only filesystem and text inspection utilities."
 
 [[rules.green]]
+commands = ["bash", "sh", "zsh", "dash"]
+flags = ["-n", "--noexec"]
+reason = "Shell syntax check only — parses but never executes."
+
+[[rules.green]]
 commands = ["cd", "pwd", "pushd", "popd", "dirs"]
 reason = "Directory navigation."
 
