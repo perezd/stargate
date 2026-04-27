@@ -90,9 +90,11 @@ func TestHealthEndpoint(t *testing.T) {
 	if _, ok := body["uptime_seconds"]; !ok {
 		t.Error("missing uptime_seconds field")
 	}
-	// Health should only return status and uptime — nothing else.
-	if len(body) != 2 {
-		t.Errorf("health returned %d fields, want exactly 2 (status, uptime_seconds)", len(body))
+	if _, ok := body["llm_provider"]; !ok {
+		t.Error("missing llm_provider field")
+	}
+	if len(body) != 3 {
+		t.Errorf("health returned %d fields, want exactly 3 (status, uptime_seconds, llm_provider)", len(body))
 	}
 }
 

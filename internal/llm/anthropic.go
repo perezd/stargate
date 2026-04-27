@@ -169,6 +169,11 @@ func parseResponse(text string) (ReviewResponse, error) {
 	}, nil
 }
 
+// IsSDK returns true if the provider uses the direct API key path.
+func (p *AnthropicProvider) IsSDK() bool {
+	return p.hasClient
+}
+
 // HasAuth returns true if this provider has credentials available
 // (either API key or OAuth token).
 func (p *AnthropicProvider) HasAuth() bool {

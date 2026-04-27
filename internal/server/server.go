@@ -73,9 +73,14 @@ func (s *Server) registerRoutes() {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	var llmProvider any
+	if pt := s.clf.LLMProviderType(); pt != "" {
+		llmProvider = pt
+	}
 	resp := map[string]any{
 		"status":         "ok",
 		"uptime_seconds": time.Since(s.startTime).Seconds(),
+		"llm_provider":   llmProvider,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -39,6 +39,7 @@ type Classifier struct {
 	unresolvable    string
 	version         string // from config, included in every response
 	llmProvider     llm.ReviewerProvider // nil = LLM review disabled
+	llmProviderType string               // "anthropic_sdk", "oauth_subprocess", or ""
 	scrubber        *scrub.Scrubber
 	llmCfg          config.LLMConfig
 	corpusCfg       config.CorpusConfig
@@ -163,11 +164,17 @@ func New(cfg *config.Config) (*Classifier, error) {
 
 	// Initialize LLM provider (nil if no auth available).
 	var provider llm.ReviewerProvider
+	var providerType string
 	switch strings.ToLower(strings.TrimSpace(cfg.LLM.Provider)) {
 	case "", "anthropic":
 		ap := llm.NewAnthropicProvider()
 		if ap.HasAuth() {
 			provider = ap
+			if ap.IsSDK() {
+				providerType = "anthropic_sdk"
+			} else {
+				providerType = "oauth_subprocess"
+			}
 		}
 	default:
 		return nil, fmt.Errorf("classifier: unsupported LLM provider %q", cfg.LLM.Provider)
@@ -253,6 +260,7 @@ func New(cfg *config.Config) (*Classifier, error) {
 		unresolvable:    cfg.Classifier.UnresolvableExpansion,
 		version:         cmp.Or(cfg.Version, "dev"),
 		llmProvider:     provider,
+		llmProviderType: providerType,
 		scrubber:        scrubber,
 		llmCfg:          cfg.LLM,
 		corpusCfg:       cfg.Corpus,
@@ -277,6 +285,12 @@ func (c *Classifier) SetTelemetry(t telemetry.Telemetry) {
 		t = &telemetry.NoOpTelemetry{}
 	}
 	c.tel = t
+}
+
+// LLMProviderType returns the LLM provider type string for health reporting.
+// Returns "" if no provider is configured.
+func (c *Classifier) LLMProviderType() string {
+	return c.llmProviderType
 }
 
 // NewWithProvider creates a Classifier with an explicit LLM provider.
