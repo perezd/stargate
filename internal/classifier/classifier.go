@@ -90,6 +90,7 @@ type ClassifyResponse struct {
 	Context       map[string]any     `json:"context"`
 	Corpus        *CorpusSummary     `json:"corpus"`
 	Version       string             `json:"version"`
+	Debug         *DebugInfo         `json:"-"`
 }
 
 // LLMReviewResult holds the result of an LLM review (populated in M4).
