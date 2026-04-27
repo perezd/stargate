@@ -376,18 +376,13 @@ func (c *Classifier) Classify(ctx context.Context, req ClassifyRequest) *Classif
 		return resp
 	}
 
-	// Debug assembly — only for DryRun (/test endpoint). The recover guard
-	// ensures a panic in debug-only code never crashes a classification.
+	// Debug fields are populated inline at each pipeline stage, guarded by
+	// state.debug != nil. No recover() — a panic in debug code should surface
+	// the same as any other bug, not be silently swallowed.
 	if req.DryRun {
 		resp.Debug = &DebugInfo{
 			ScrubbedCommand: c.scrubber.Command(req.Command),
 		}
-		defer func() {
-			if r := recover(); r != nil {
-				fmt.Fprintf(os.Stderr, "debug: panic during debug assembly: %v\n", r)
-				resp.Debug = nil
-			}
-		}()
 	}
 
 	// 1. Command length guard.

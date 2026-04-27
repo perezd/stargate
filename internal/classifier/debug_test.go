@@ -205,14 +205,24 @@ func (m *multiCallProvider) Review(_ context.Context, _ llm.ReviewRequest) (llm.
 func TestDryRun_FileRetrievalPathValidation(t *testing.T) {
 	// Create a file in a temp dir that will be in allowed_paths.
 	// Resolve symlinks (macOS /var → /private/var) so glob patterns match.
-	tmpDir, _ := filepath.EvalSymlinks(t.TempDir())
+	tmpDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve symlinks: %v", err)
+	}
 	allowedFile := filepath.Join(tmpDir, "allowed.txt")
-	os.WriteFile(allowedFile, []byte("allowed content"), 0644)
+	if err := os.WriteFile(allowedFile, []byte("allowed content"), 0644); err != nil {
+		t.Fatalf("write allowed file: %v", err)
+	}
 
 	// Create a file outside allowed_paths.
-	deniedDir, _ := filepath.EvalSymlinks(t.TempDir())
+	deniedDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve symlinks: %v", err)
+	}
 	deniedFile := filepath.Join(deniedDir, "secret.txt")
-	os.WriteFile(deniedFile, []byte("secret content"), 0644)
+	if err := os.WriteFile(deniedFile, []byte("secret content"), 0644); err != nil {
+		t.Fatalf("write denied file: %v", err)
+	}
 
 	// Mock: first call requests both files, second call returns verdict.
 	mock := &multiCallProvider{responses: []llm.ReviewResponse{
@@ -229,7 +239,7 @@ func TestDryRun_FileRetrievalPathValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer clf.Close()
+	defer clf.Close() //nolint:errcheck
 
 	// DryRun=true — same path as /test endpoint.
 	resp := clf.Classify(context.Background(), classifier.ClassifyRequest{
@@ -265,7 +275,7 @@ func TestDryRun_FileRetrievalPathValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer clf2.Close()
+	defer clf2.Close() //nolint:errcheck
 
 	resp2 := clf2.Classify(context.Background(), classifier.ClassifyRequest{
 		Command: "curl https://example.com",

@@ -426,7 +426,7 @@ func handleCorpusRecent(args []string, configPath string, _ bool) int {
 	fs := flag.NewFlagSet("corpus recent", flag.ContinueOnError)
 	limit := fs.Int("limit", 20, "maximum number of entries to return")
 	decision := fs.String("decision", "", "filter by decision (allow, deny, user_approved)")
-	since := fs.String("since", "", "only show entries newer than this duration (e.g. 24h, 7d)")
+	since := fs.String("since", "", "only show entries newer than this duration (e.g. 1h, 24h, 168h)")
 	asJSON := fs.Bool("json", false, "output as JSON array")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "corpus recent: %v\n", err)

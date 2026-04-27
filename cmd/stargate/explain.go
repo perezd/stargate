@@ -62,7 +62,7 @@ func handleExplain(args []string, _ string, globalVerbose bool) int {
 		return 0
 	}
 
-	printExplain(os.Stdout, result, f.verbose)
+	printExplain(os.Stdout, result, f.command, f.verbose)
 	return 0
 }
 
@@ -128,11 +128,11 @@ func sectionHeader(title string) string {
 }
 
 // printExplain writes the pretty-printed explain output to w.
-func printExplain(w io.Writer, r *explainResult, verbose bool) {
+func printExplain(w io.Writer, r *explainResult, command string, verbose bool) {
 	// Header block.
 	fmt.Fprintf(w, "DECISION: %s → %s (%s)\n", r.Decision, r.Action, r.Reason)
 	fmt.Fprintf(w, "TRACE ID: %s\n", r.StargateTrID)
-	fmt.Fprintf(w, "COMMAND:  %s\n", r.ClassifyResponse.Context["command_tested"])
+	fmt.Fprintf(w, "COMMAND:  %s\n", command)
 
 	scrubbed := ""
 	if r.Debug != nil {

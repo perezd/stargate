@@ -174,7 +174,7 @@ func (c *Corpus) Recent(filter RecentFilter) ([]RecentEntry, error) {
 		args = append(args, filter.Decision)
 	}
 	if filter.Since > 0 {
-		cutoff := time.Now().Add(-filter.Since).Format(time.RFC3339)
+		cutoff := time.Now().UTC().Add(-filter.Since).Format(time.RFC3339)
 		query += ` AND created_at >= ?`
 		args = append(args, cutoff)
 	}
