@@ -156,6 +156,15 @@ func ownerFromGitConfig(ctx context.Context, cwd string) (string, bool, error) {
 	}
 
 	f, err := os.Open(configPath)
+	if err != nil && (os.IsNotExist(err) || isNotDirectory(err)) {
+		// In a git worktree, .git is a file containing "gitdir: <path>".
+		// Follow the pointer to find the main repo's config.
+		configPath, err = resolveWorktreeConfig(cwd)
+		if err != nil || configPath == "" {
+			return "", false, nil
+		}
+		f, err = os.Open(configPath)
+	}
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", false, nil
@@ -177,6 +186,51 @@ func ownerFromGitConfig(ctx context.Context, cwd string) (string, bool, error) {
 		return "", false, nil
 	}
 	return owner, true, nil
+}
+
+// isNotDirectory checks if an error is ENOTDIR — returned when a path
+// component is a file, not a directory (e.g., .git/config when .git is a file).
+func isNotDirectory(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "not a directory")
+}
+
+// resolveWorktreeConfig follows a git worktree .git file pointer to find
+// the main repo's config. Returns "" if not a worktree or unresolvable.
+func resolveWorktreeConfig(cwd string) (string, error) {
+	dotGit := filepath.Join(cwd, ".git")
+	data, err := os.ReadFile(dotGit)
+	if err != nil {
+		return "", err
+	}
+	line := strings.TrimSpace(string(data))
+	gitdir, ok := strings.CutPrefix(line, "gitdir: ")
+	if !ok {
+		return "", nil
+	}
+	gitdir = strings.TrimSpace(gitdir)
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Join(cwd, gitdir)
+	}
+	// gitdir points to .git/worktrees/<name> — walk up to .git/config.
+	// Resolve symlinks first to normalize the path.
+	gitdir, err = filepath.EvalSymlinks(gitdir)
+	if err != nil {
+		return "", nil
+	}
+	// Walk up until we find a directory containing "config".
+	dir := gitdir
+	for i := 0; i < 5; i++ {
+		candidate := filepath.Join(dir, "config")
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return "", nil
 }
 
 // parseGitConfigOriginURL reads an INI-style git config and extracts the URL

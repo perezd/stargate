@@ -447,3 +447,77 @@ func TestResolverRegistryOverwrite(t *testing.T) {
 		t.Error("first resolver should not have been called")
 	}
 }
+
+// --- Git worktree support ---
+
+func TestGitWorktreeResolvesOwner(t *testing.T) {
+	// Create a main repo with .git/config.
+	mainRepo := t.TempDir()
+	writeGitConfig(t, mainRepo, `[remote "origin"]
+	url = https://github.com/limbic-systems/codetainer.git
+`)
+
+	// Create a worktree directory with a .git file pointing to the main repo.
+	worktree := t.TempDir()
+	worktreeGitDir := filepath.Join(mainRepo, ".git", "worktrees", "my-worktree")
+	if err := os.MkdirAll(worktreeGitDir, 0o755); err != nil {
+		t.Fatalf("mkdir worktree gitdir: %v", err)
+	}
+	// Write the .git file in the worktree (pointer to the worktree gitdir).
+	gitFile := filepath.Join(worktree, ".git")
+	if err := os.WriteFile(gitFile, []byte("gitdir: "+worktreeGitDir+"\n"), 0o644); err != nil {
+		t.Fatalf("write .git file: %v", err)
+	}
+
+	ctx := context.Background()
+	cmd := ghCmd(nil, []string{"pr", "list"})
+	got, ok, err := scopes.ResolveGitHubRepoOwner(ctx, cmd, worktree)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected resolution to succeed from worktree")
+	}
+	if got != "limbic-systems" {
+		t.Errorf("owner = %q, want %q", got, "limbic-systems")
+	}
+}
+
+func TestGitWorktreeRelativePath(t *testing.T) {
+	// Create a main repo with .git/config.
+	mainRepo := t.TempDir()
+	writeGitConfig(t, mainRepo, `[remote "origin"]
+	url = git@github.com:myorg/myrepo.git
+`)
+
+	// Create worktree inside the main repo (relative gitdir path).
+	worktreeGitDir := filepath.Join(mainRepo, ".git", "worktrees", "feature")
+	if err := os.MkdirAll(worktreeGitDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	worktree := filepath.Join(mainRepo, ".worktrees", "feature")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatalf("mkdir worktree: %v", err)
+	}
+	// Relative gitdir path from worktree to main .git/worktrees/feature.
+	relPath, err := filepath.Rel(worktree, worktreeGitDir)
+	if err != nil {
+		t.Fatalf("rel: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, ".git"), []byte("gitdir: "+relPath+"\n"), 0o644); err != nil {
+		t.Fatalf("write .git: %v", err)
+	}
+
+	ctx := context.Background()
+	cmd := ghCmd(nil, []string{"api", "graphql"})
+	got, ok, err := scopes.ResolveGitHubRepoOwner(ctx, cmd, worktree)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected resolution to succeed from worktree with relative gitdir")
+	}
+	if got != "myorg" {
+		t.Errorf("owner = %q, want %q", got, "myorg")
+	}
+}
