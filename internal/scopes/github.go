@@ -207,18 +207,27 @@ func resolveWorktreeConfig(cwd string) (string, error) {
 	if !filepath.IsAbs(gitdir) {
 		gitdir = filepath.Join(cwd, gitdir)
 	}
-	// gitdir points to .git/worktrees/<name>. Resolve symlinks to normalize,
-	// then go up two levels to reach the .git directory.
 	gitdir, err = filepath.EvalSymlinks(gitdir)
 	if err != nil {
 		return "", nil
 	}
-	dotGitDir := filepath.Dir(filepath.Dir(gitdir))
-	// Validate we landed in an actual .git directory (must contain HEAD).
-	if _, err := os.Stat(filepath.Join(dotGitDir, "HEAD")); err != nil {
+	// Distinguish worktrees from submodules by parent directory name.
+	// Worktree:  .git/worktrees/<name> → config is at .git/config (two levels up)
+	// Submodule: .git/modules/<name>   → config is at .git/modules/<name>/config (in gitdir itself)
+	parent := filepath.Dir(gitdir)
+	var configDir string
+	switch filepath.Base(parent) {
+	case "worktrees":
+		configDir = filepath.Dir(parent)
+	case "modules":
+		configDir = gitdir
+	default:
 		return "", nil
 	}
-	candidate := filepath.Join(dotGitDir, "config")
+	if _, err := os.Stat(filepath.Join(configDir, "HEAD")); err != nil {
+		return "", nil
+	}
+	candidate := filepath.Join(configDir, "config")
 	if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
 		return candidate, nil
 	}

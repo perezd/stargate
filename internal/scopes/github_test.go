@@ -531,3 +531,46 @@ func TestGitWorktreeRelativePath(t *testing.T) {
 		t.Errorf("owner = %q, want %q", got, "myorg")
 	}
 }
+
+func TestGitSubmoduleResolvesOwnConfig(t *testing.T) {
+	// Submodule .git files point to .git/modules/<name>, NOT .git/worktrees/<name>.
+	// The resolver must read the submodule's own config, not the parent repo's.
+	parentRepo := t.TempDir()
+	writeGitConfig(t, parentRepo, `[remote "origin"]
+	url = https://github.com/parent-org/parent-repo.git
+`)
+	if err := os.WriteFile(filepath.Join(parentRepo, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatalf("write HEAD: %v", err)
+	}
+
+	// Create submodule gitdir inside parent's .git/modules/.
+	submoduleGitDir := filepath.Join(parentRepo, ".git", "modules", "my-submodule")
+	if err := os.MkdirAll(submoduleGitDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(submoduleGitDir, "config"), []byte("[remote \"origin\"]\n\turl = https://github.com/sub-org/sub-repo.git\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(submoduleGitDir, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatalf("write HEAD: %v", err)
+	}
+
+	// Create submodule directory with .git file pointing to modules gitdir.
+	submodule := t.TempDir()
+	if err := os.WriteFile(filepath.Join(submodule, ".git"), []byte("gitdir: "+submoduleGitDir+"\n"), 0o644); err != nil {
+		t.Fatalf("write .git: %v", err)
+	}
+
+	ctx := context.Background()
+	cmd := ghCmd(nil, []string{"pr", "list"})
+	got, ok, err := scopes.ResolveGitHubRepoOwner(ctx, cmd, submodule)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected resolution to succeed from submodule")
+	}
+	if got != "sub-org" {
+		t.Errorf("owner = %q, want %q (submodule owner, not parent)", got, "sub-org")
+	}
+}
