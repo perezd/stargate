@@ -335,20 +335,17 @@ func TestExcludeFlags(t *testing.T) {
 	})
 }
 
-func TestGitRemoteReadOnly(t *testing.T) {
-	greenRules := []config.Rule{
-		{Command: "git", Subcommands: []string{"remote"}, Pattern: `^\s*git\s+remote\s+(get-url|show)\s`, Reason: "read-only remote"},
-	}
+func TestGitRemoteAlwaysYellow(t *testing.T) {
 	yellowRules := []config.Rule{
 		{Command: "git", Subcommands: []string{"remote"}, LLMReview: boolPtr(true), Reason: "remote mutation"},
 	}
-	cfg := testConfig(nil, greenRules, yellowRules, "yellow")
+	cfg := testConfig(nil, nil, yellowRules, "yellow")
 	engine, err := NewEngine(cfg)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
 
-	t.Run("git remote get-url is GREEN", func(t *testing.T) {
+	t.Run("git remote get-url is YELLOW", func(t *testing.T) {
 		result := engine.Evaluate(context.Background(),
 			[]CommandInfo{
 				{Name: "git", Subcommand: "remote", Args: []string{"get-url", "origin"}},
@@ -356,8 +353,8 @@ func TestGitRemoteReadOnly(t *testing.T) {
 			"git remote get-url origin",
 			"",
 		)
-		if result.Decision != "green" {
-			t.Errorf("expected green, got %s (reason: %s)", result.Decision, result.Reason)
+		if result.Decision != "yellow" {
+			t.Errorf("expected yellow, got %s (reason: %s)", result.Decision, result.Reason)
 		}
 	})
 
@@ -375,17 +372,14 @@ func TestGitRemoteReadOnly(t *testing.T) {
 		if !result.LLMReview {
 			t.Errorf("expected LLMReview true, got false (reason: %s)", result.Reason)
 		}
-		if result.Reason != "remote mutation" {
-			t.Errorf("expected reason %q, got %q", "remote mutation", result.Reason)
-		}
 	})
 
-	t.Run("git remote add show is YELLOW not GREEN (positional safety)", func(t *testing.T) {
+	t.Run("git remote show is YELLOW", func(t *testing.T) {
 		result := engine.Evaluate(context.Background(),
 			[]CommandInfo{
-				{Name: "git", Subcommand: "remote", Args: []string{"add", "show", "https://example.com/repo"}},
+				{Name: "git", Subcommand: "remote", Args: []string{"show", "origin"}},
 			},
-			"git remote add show https://example.com/repo",
+			"git remote show origin",
 			"",
 		)
 		if result.Decision != "yellow" {
