@@ -108,6 +108,64 @@ func TestParseResponse_NestedJSONInReasoning(t *testing.T) {
 	}
 }
 
+func TestSubprocessArgs(t *testing.T) {
+	req := ReviewRequest{
+		SystemPrompt: "You are a classifier.",
+		UserContent:  "echo hello",
+		Model:        "claude-sonnet-4-6",
+		MaxTokens:    512,
+		Temperature:  0.0,
+	}
+	args := subprocessArgs(req)
+
+	// --system-prompt must carry the system prompt (not concatenated into stdin).
+	foundSysPrompt := false
+	for i, a := range args {
+		if a == "--system-prompt" {
+			if i+1 >= len(args) {
+				t.Fatal("--system-prompt flag has no value")
+			}
+			if args[i+1] != req.SystemPrompt {
+				t.Errorf("--system-prompt value = %q, want %q", args[i+1], req.SystemPrompt)
+			}
+			foundSysPrompt = true
+		}
+	}
+	if !foundSysPrompt {
+		t.Error("args missing --system-prompt flag")
+	}
+
+	// Must include -p, --model, --max-turns 1, and trailing - for stdin.
+	want := map[string]bool{"-p": false, "--model": false, "--max-turns": false, "-": false}
+	for _, a := range args {
+		if _, ok := want[a]; ok {
+			want[a] = true
+		}
+	}
+	for flag, found := range want {
+		if !found {
+			t.Errorf("args missing required flag %q", flag)
+		}
+	}
+
+	// Trailing arg must be "-" (stdin marker).
+	if args[len(args)-1] != "-" {
+		t.Errorf("last arg = %q, want %q (stdin marker)", args[len(args)-1], "-")
+	}
+
+	// SystemPrompt must NOT appear in UserContent position (stdin).
+	// This is the trust boundary: system prompt via flag, user content via stdin.
+	for i, a := range args {
+		if a == "-p" || a == "--model" || a == "--max-turns" || a == "--system-prompt" || a == "-" {
+			continue
+		}
+		if i > 0 && (args[i-1] == "--model" || args[i-1] == "--max-turns" || args[i-1] == "--system-prompt") {
+			continue // value of a flag
+		}
+		t.Errorf("unexpected arg at position %d: %q", i, a)
+	}
+}
+
 func TestNewAnthropicProvider_NoAuth(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")

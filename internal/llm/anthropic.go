@@ -105,12 +105,7 @@ func (p *AnthropicProvider) reviewSDK(ctx context.Context, req ReviewRequest) (R
 // prevents Claude Code's own system prompt from treating our classifier
 // instructions as prompt injection.
 func (p *AnthropicProvider) reviewSubprocess(ctx context.Context, req ReviewRequest) (ReviewResponse, error) {
-	args := []string{
-		"-p",
-		"--model", req.Model,
-		"--max-turns", "1",
-		"--system-prompt", req.SystemPrompt,
-	}
+	args := subprocessArgs(req)
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 3 * time.Second
@@ -192,6 +187,18 @@ func (p *AnthropicProvider) HasAuth() bool {
 		return true
 	}
 	return os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != ""
+}
+
+// subprocessArgs builds the argument list for the claude -p subprocess.
+// Extracted for testability — the argv contract is security-relevant.
+func subprocessArgs(req ReviewRequest) []string {
+	return []string{
+		"-p",
+		"--model", req.Model,
+		"--max-turns", "1",
+		"--system-prompt", req.SystemPrompt,
+		"-",
+	}
 }
 
 // HasCLI returns true if the `claude` binary is on PATH.
