@@ -435,7 +435,7 @@ func TestEvaluate_YellowMatching(t *testing.T) {
 			raw:           "unknown_command",
 			wantYellow:    true,
 			wantLLMReview: true,
-			wantReason:    "", // default, no reason from rule
+			wantReason:    "no rule matched; applied default classification",
 		},
 	}
 
@@ -449,7 +449,7 @@ func TestEvaluate_YellowMatching(t *testing.T) {
 				if result.Action != "review" {
 					t.Errorf("expected action=review, got %s", result.Action)
 				}
-				if tt.wantReason != "" && result.Reason != tt.wantReason {
+				if result.Reason != tt.wantReason {
 					t.Errorf("expected reason=%q, got %q", tt.wantReason, result.Reason)
 				}
 				if result.LLMReview != tt.wantLLMReview {

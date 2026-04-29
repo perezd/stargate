@@ -291,7 +291,7 @@ func (e *Engine) evaluate(ctx context.Context, cmds []CommandInfo, rawCommand st
 		Decision:  e.defaultDecision,
 		Action:    decisionToAction(e.defaultDecision),
 		Reason:    "no rule matched; applied default classification",
-		LLMReview: e.defaultLLMReview,
+		LLMReview: e.defaultLLMReview && e.defaultDecision == "yellow",
 	}
 }
 
