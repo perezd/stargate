@@ -191,7 +191,7 @@ type LLMConfig struct {
 	AllowedPaths               []string `toml:"allowed_paths"`
 	DeniedPaths                []string `toml:"denied_paths"`
 	SystemPrompt               string   `toml:"system_prompt"`
-	MaxResponseReasoningLength int      `toml:"max_response_reasoning_length"`
+	MaxResponseReasoningLength *int     `toml:"max_response_reasoning_length"`
 }
 
 // ScrubbingConfig holds secret-scrubbing settings.
@@ -371,6 +371,19 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.LLM.MaxTotalFileBytes == 0 {
 		cfg.LLM.MaxTotalFileBytes = 131072 // 128KB
+	}
+	if cfg.LLM.Model == "" {
+		cfg.LLM.Model = "claude-sonnet-4-6"
+	}
+	if cfg.LLM.MaxTokens == 0 {
+		cfg.LLM.MaxTokens = 512
+	}
+	if cfg.LLM.MaxResponseReasoningLength == nil {
+		defaultReasoningLen := 200
+		cfg.LLM.MaxResponseReasoningLength = &defaultReasoningLen
+	}
+	if cfg.LLM.MaxFileSize == 0 {
+		cfg.LLM.MaxFileSize = 65536 // 64KB
 	}
 	if cfg.LLM.MaxCallsPerMinute == nil {
 		defaultRate := 30
@@ -558,8 +571,8 @@ func (cfg *Config) Validate() error {
 	if cfg.LLM.Temperature < 0 || cfg.LLM.Temperature > 2 {
 		return fmt.Errorf("config: llm.temperature must be between 0.0 and 2.0; got %f", cfg.LLM.Temperature)
 	}
-	if cfg.LLM.MaxResponseReasoningLength < 0 {
-		return fmt.Errorf("config: llm.max_response_reasoning_length must be non-negative; got %d", cfg.LLM.MaxResponseReasoningLength)
+	if cfg.LLM.MaxResponseReasoningLength != nil && *cfg.LLM.MaxResponseReasoningLength < 0 {
+		return fmt.Errorf("config: llm.max_response_reasoning_length must be non-negative; got %d", *cfg.LLM.MaxResponseReasoningLength)
 	}
 	if cfg.LLM.MaxFilesPerRequest < 0 {
 		return fmt.Errorf("config: llm.max_files_per_request must be non-negative; got %d", cfg.LLM.MaxFilesPerRequest)
