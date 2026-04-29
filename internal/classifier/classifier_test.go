@@ -12,6 +12,7 @@ import (
 )
 
 func boolPtr(b bool) *bool { return &b }
+func intPtr(i int) *int    { return &i }
 
 // testConfig returns a minimal config with representative RED, GREEN, and
 // YELLOW rules for classifier unit tests.
@@ -262,7 +263,7 @@ func llmTestConfig() *config.Config {
 		LLM: config.LLMConfig{
 			Model:                      "claude-sonnet-4-6",
 			MaxTokens:                  512,
-			MaxResponseReasoningLength: 200,
+			MaxResponseReasoningLength: intPtr(200),
 			MaxFilesPerRequest:         3,
 			MaxTotalFileBytes:          131072,
 			AllowFileRetrieval:         true,

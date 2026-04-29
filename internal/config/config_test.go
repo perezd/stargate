@@ -312,13 +312,34 @@ default_decision = "yellow"
 	if cfg.LLM.MaxTokens != 512 {
 		t.Errorf("LLM.MaxTokens = %d, want %d", cfg.LLM.MaxTokens, 512)
 	}
-	if cfg.LLM.MaxResponseReasoningLength != 200 {
-		t.Errorf("LLM.MaxResponseReasoningLength = %d, want %d", cfg.LLM.MaxResponseReasoningLength, 200)
+	if cfg.LLM.MaxResponseReasoningLength == nil || *cfg.LLM.MaxResponseReasoningLength != 200 {
+		t.Errorf("LLM.MaxResponseReasoningLength = %v, want 200", cfg.LLM.MaxResponseReasoningLength)
 	}
 	if cfg.LLM.MaxFileSize != 65536 {
 		t.Errorf("LLM.MaxFileSize = %d, want %d", cfg.LLM.MaxFileSize, 65536)
 	}
 	if cfg.LLM.AllowFileRetrieval != false {
 		t.Errorf("LLM.AllowFileRetrieval = %v, want false (secure by default)", cfg.LLM.AllowFileRetrieval)
+	}
+}
+
+func TestExplicitZeroReasoningLengthPreserved(t *testing.T) {
+	path := writeConfig(t, `
+[server]
+listen = "127.0.0.1:9099"
+
+[llm]
+max_response_reasoning_length = 0
+`)
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LLM.MaxResponseReasoningLength == nil {
+		t.Fatal("LLM.MaxResponseReasoningLength is nil, want explicit 0")
+	}
+	if *cfg.LLM.MaxResponseReasoningLength != 0 {
+		t.Errorf("LLM.MaxResponseReasoningLength = %d, want 0 (explicit omit)", *cfg.LLM.MaxResponseReasoningLength)
 	}
 }

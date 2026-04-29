@@ -267,7 +267,7 @@ func New(cfg *config.Config) (*Classifier, error) {
 		corpusMaxAge:    corpusMaxAge,
 		scopes:          cfg.Scopes,
 		serverCWD:       serverCWD,
-		maxReasonLen:    cfg.LLM.MaxResponseReasoningLength,
+		maxReasonLen:    derefIntOr(cfg.LLM.MaxResponseReasoningLength, 200),
 		corpus:          c,
 		cmdCache:        cmdCache,
 		feedbackHandler: feedbackHandler,
@@ -919,6 +919,13 @@ func (c *Classifier) buildASTTextSummary(cmds []rules.CommandInfo) string {
 		parts = append(parts, line)
 	}
 	return strings.Join(parts, "\n")
+}
+
+func derefIntOr(p *int, fallback int) int {
+	if p == nil {
+		return fallback
+	}
+	return *p
 }
 
 // truncateStr truncates s to maxLen runes, appending "..." when truncated.
