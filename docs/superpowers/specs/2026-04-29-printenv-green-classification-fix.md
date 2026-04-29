@@ -61,7 +61,7 @@ reason = "System info queries (read-only)."
 [[rules.yellow]]
 command = "printenv"
 llm_review = true
-reason = "printenv dumps all environment variables including secrets (tokens, API keys, credentials) when invoked without arguments."
+reason = "printenv reveals environment variable values and can expose secrets; the no-argument form is especially risky as it dumps the full environment."
 ```
 
 #### 2. `stargate.toml`
@@ -86,15 +86,15 @@ reason = "System info queries (read-only)."
 [[rules.yellow]]
 command = "env"
 llm_review = true
-reason = "env can execute commands and modify environment (PATH, LD_PRELOAD)."
+reason = "Bare env prints environment variables and may expose secrets (tokens, API keys, credentials)."
 
 [[rules.yellow]]
 command = "printenv"
 llm_review = true
-reason = "printenv dumps all environment variables including secrets (tokens, API keys, credentials) when invoked without arguments."
+reason = "printenv reveals environment variable values and can expose secrets; the no-argument form is especially risky as it dumps the full environment."
 ```
 
-Note: The `env` reason text is harmonized with `default-stargate.toml`'s existing wording.
+Note: `env` is a registered wrapper — the parser strips it when an inner command follows (e.g., `env FOO=bar cmd` resolves to `cmd`). This rule only fires for bare `env` (no inner command), so the reason text accurately describes the gated behavior.
 
 #### 3. Test
 
