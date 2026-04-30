@@ -298,7 +298,7 @@ func TestValidation(t *testing.T) {
 	}
 }
 
-func TestApplyDefaultsLLMFields(t *testing.T) {
+func TestApplyDefaults(t *testing.T) {
 	path := writeConfig(t, `
 [server]
 listen = "127.0.0.1:9099"
@@ -325,6 +325,9 @@ default_decision = "yellow"
 	}
 	if cfg.LLM.AllowFileRetrieval != false {
 		t.Errorf("LLM.AllowFileRetrieval = %v, want false (secure by default)", cfg.LLM.AllowFileRetrieval)
+	}
+	if cfg.Server.Timeout != "30s" {
+		t.Errorf("Server.Timeout = %q, want %q", cfg.Server.Timeout, "30s")
 	}
 }
 

@@ -11,7 +11,7 @@ import (
 )
 
 const defaultStargateURL = "http://127.0.0.1:9099"
-const defaultTimeout = 10 * time.Second
+const defaultTimeout = 35 * time.Second
 
 const hookUsage = `Usage: stargate hook [flags]
 
@@ -22,7 +22,7 @@ Flags:
   --agent string       Agent type (required, e.g. "claude-code")
   --event string       Hook event (default "pre-tool-use")
   --url string         Stargate server URL (default: STARGATE_URL env or http://127.0.0.1:9099)
-  --timeout duration   HTTP request timeout (default 10s)
+  --timeout duration   HTTP request timeout (default 35s)
   --allow-remote       Allow non-loopback server URLs
 `
 

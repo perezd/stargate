@@ -8,7 +8,7 @@ listen = "127.0.0.1:9099"
 
 # Maximum time to wait for a classification (including LLM review).
 # If exceeded, the command falls through to the default_decision.
-timeout = "10s"
+timeout = "30s"
 
 [parser]
 # Shell dialect to parse. Options: "bash", "posix", "mksh"

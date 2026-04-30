@@ -342,7 +342,7 @@ func applyDefaults(cfg *Config) {
 		cfg.Server.Listen = "127.0.0.1:9099"
 	}
 	if cfg.Server.Timeout == "" {
-		cfg.Server.Timeout = "10s"
+		cfg.Server.Timeout = "30s"
 	}
 	if cfg.LLM.Provider == "" {
 		cfg.LLM.Provider = "anthropic"
