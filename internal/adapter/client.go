@@ -20,7 +20,7 @@ import (
 // ClientConfig holds HTTP client settings resolved from flags/env.
 type ClientConfig struct {
 	URL         string        // resolved from --url / STARGATE_URL / default
-	Timeout     time.Duration // resolved from --timeout / default 30s
+	Timeout     time.Duration // provided by caller (CLI default: 35s)
 	AllowRemote bool          // --allow-remote flag
 	Verbose     bool          // --verbose flag
 }

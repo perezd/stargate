@@ -33,7 +33,7 @@ Flags:
   --json               Output the full ClassifyResponse JSON
   --verbose            Include timing, LLM, and corpus fields in output
   --url string         Stargate server URL (default: http://127.0.0.1:9099)
-  --timeout duration   HTTP request timeout (default 30s)
+  --timeout duration   HTTP request timeout (default 35s)
   --cached             Allow cache reads during dry-run (for debugging)
   --offline            Skip the server; classify in-process
 `
