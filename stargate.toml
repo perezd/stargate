@@ -23,6 +23,10 @@ resolve_aliases = false
 # "yellow" is the safest default — unknown commands require user approval.
 default_decision = "yellow"
 
+# Whether to send unmatched commands (those not matching any rule) to LLM
+# review before falling through to the default_decision.
+default_llm_review = true
+
 # When a command contains unresolvable variable expansions (e.g., $SOME_VAR
 # used as a command name), treat it as this decision level.
 unresolvable_expansion = "yellow"
@@ -61,6 +65,7 @@ allowed_domains = ["*.example.com", "registry.npmjs.org", "*.googleapis.com"]
 #   commands     — Array of command names (matches any)
 #   subcommands  — If set, also match the first argument (e.g., git "push")
 #   flags        — Array of flags that trigger this rule (e.g., ["-rf", "-fr"])
+#   exclude_flags — Rule matches only if NONE of these flags are present
 #   args         — Array of argument patterns (glob syntax) that trigger this rule
 #   pattern      — Regex applied to the raw command string (fallback for
 #                  constructs that resist AST decomposition)
@@ -73,7 +78,9 @@ allowed_domains = ["*.example.com", "registry.npmjs.org", "*.googleapis.com"]
 #   llm_review   — (YELLOW only) Whether to escalate to LLM for review.
 #   reason       — Human-readable explanation. Shown to the user and to the LLM.
 
-# === RED Rules (always block) =========================================
+# === RED Rules (always block) =============================================
+
+# --- Destructive filesystem operations ---
 
 [[rules.red]]
 command = "rm"
@@ -82,8 +89,24 @@ reason = "Recursive force delete is high-risk."
 
 [[rules.red]]
 command = "rm"
+flags = ["-r", "--recursive"]
+args = ["/", "/*", "/home/*", "/Users/*", "~", "~/*", "/etc/*", "/usr/*", "/var/*", "/boot/*", "/sys/*", "/proc/*"]
+reason = "Recursive delete targeting system or home directories."
+
+[[rules.red]]
+command = "rm"
 args = ["/", "/etc/*", "/usr/*", "/var/*", "/boot/*", "/sys/*", "/proc/*"]
 reason = "Deletion targeting system directories."
+
+[[rules.red]]
+command = "find"
+flags = ["-delete"]
+reason = "find -delete removes files without confirmation."
+
+[[rules.red]]
+command = "find"
+flags = ["-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf"]
+reason = "find with execution or file-writing actions."
 
 [[rules.red]]
 commands = ["mkfs", "dd", "fdisk", "parted", "wipefs"]
@@ -92,6 +115,8 @@ reason = "Disk/partition manipulation is never appropriate in a dev context."
 [[rules.red]]
 commands = ["shutdown", "reboot", "halt", "poweroff", "init"]
 reason = "System power management."
+
+# --- Remote code execution patterns ---
 
 [[rules.red]]
 pattern = '(?i)curl\s.*\|\s*(bash|sh|zsh|dash|python|perl|ruby|node)'
@@ -102,17 +127,32 @@ pattern = '(?i)wget\s.*\|\s*(bash|sh|zsh|dash|python|perl|ruby|node)'
 reason = "Remote code execution via pipe-to-shell."
 
 [[rules.red]]
+pattern = 'base64\s+(-d|--decode).*\|\s*(bash|sh|zsh|dash|python|perl|ruby|node)'
+reason = "Base64-decoded payload piped to interpreter."
+
+[[rules.red]]
+pattern = '(bash|sh|zsh)\s*<<<'
+reason = "Here-string execution — potential obfuscated payload."
+
+# --- Network exfiltration tools ---
+
+[[rules.red]]
 commands = ["nc", "ncat", "netcat", "socat"]
-flags = ["-e", "-c"]
-reason = "Reverse shell via netcat with command execution."
+reason = "Network tools capable of data exfiltration and reverse shells. No legitimate dev agent use case."
+
+[[rules.red]]
+commands = ["telnet", "nmap", "masscan"]
+reason = "Network reconnaissance/exfiltration tools."
 
 [[rules.red]]
 pattern = '/dev/(tcp|udp)/'
-reason = "Bash /dev/tcp reverse shell attempt."
+reason = "Bash /dev/tcp reverse shell or exfiltration attempt."
+
+# --- Privilege escalation ---
 
 [[rules.red]]
-commands = ["iptables", "ip6tables", "nft", "ufw"]
-reason = "Firewall manipulation."
+commands = ["sudo", "doas", "runuser", "pkexec"]
+reason = "Privilege escalation commands. Commands should be run without elevated privileges."
 
 [[rules.red]]
 command = "chmod"
@@ -125,6 +165,59 @@ args = ["-R", "--recursive"]
 scope = "/"
 reason = "Recursive ownership changes on system paths."
 
+# --- System manipulation ---
+
+[[rules.red]]
+commands = ["iptables", "ip6tables", "nft", "ufw"]
+reason = "Firewall manipulation."
+
+[[rules.red]]
+commands = ["mount", "umount"]
+reason = "Filesystem mount manipulation."
+
+[[rules.red]]
+commands = ["insmod", "modprobe", "rmmod", "sysctl"]
+reason = "Kernel module or parameter manipulation."
+
+[[rules.red]]
+commands = ["nsenter", "unshare", "chroot"]
+reason = "Namespace/root manipulation — container escape vectors."
+
+# --- Credential and key access ---
+
+[[rules.red]]
+commands = ["security", "keychain"]
+reason = "macOS Keychain access — credential theft risk."
+
+[[rules.red]]
+commands = ["secret-tool", "gnome-keyring-daemon"]
+reason = "Linux secret store access — credential theft risk."
+
+[[rules.red]]
+command = "ssh-keygen"
+reason = "SSH key generation/manipulation by an AI agent is never appropriate."
+
+[[rules.red]]
+commands = ["gpg", "gpg2"]
+flags = ["--export-secret-keys", "--export-secret-subkeys"]
+reason = "Secret key export."
+
+# --- Persistence mechanisms ---
+
+[[rules.red]]
+pattern = '>\s*~/\.(bashrc|bash_profile|zshrc|profile|zprofile|zshenv|login|logout)'
+reason = "Writing to shell startup files creates persistence."
+
+[[rules.red]]
+pattern = '>\s*/etc/(crontab|cron\.\w+/)'
+reason = "Writing to system cron directories creates persistence."
+
+[[rules.red]]
+commands = ["useradd", "usermod", "adduser", "groupadd", "visudo"]
+reason = "User/group management — privilege persistence."
+
+# --- Dynamic code execution ---
+
 [[rules.red]]
 command = "eval"
 reason = "Dynamic code execution via eval — cannot be statically analyzed."
@@ -134,17 +227,41 @@ commands = ["base64", "xxd", "openssl"]
 context = "pipeline_sink"
 reason = "Encoded payload execution patterns."
 
-[[rules.red]]
-commands = ["sudo", "doas", "runuser", "pkexec"]
-reason = "Privilege escalation commands. Commands should be run without elevated privileges."
+# --- Guardrail introspection ---
 
-# === GREEN Rules (always allow) =======================================
+[[rules.red]]
+command = "stargate"
+reason = "Agents must not introspect their own guardrails. Debug stargate via SSH, not through the agent."
+
+# --- Process tracing ---
+
+[[rules.red]]
+commands = ["strace", "ltrace"]
+reason = "Process tracing — can extract secrets from running processes."
+
+# --- Git destructive operations ---
+
+[[rules.red]]
+command = "git"
+subcommands = ["push"]
+flags = ["--force", "-f"]
+reason = "Force-push can destroy remote history."
+
+# --- Container escape ---
+
+[[rules.red]]
+command = "docker"
+subcommands = ["run"]
+flags = ["--privileged"]
+reason = "Privileged container — full host access."
+
+# === GREEN Rules (always allow) ===========================================
 
 [[rules.green]]
 command = "git"
 subcommands = [
   "status", "diff", "log", "show", "branch", "tag",
-  "stash", "remote", "fetch", "blame", "shortlog",
+  "stash", "fetch", "blame", "shortlog",
   "describe", "rev-parse", "ls-files", "ls-tree"
 ]
 reason = "Read-only git operations."
@@ -152,34 +269,69 @@ reason = "Read-only git operations."
 [[rules.green]]
 command = "git"
 subcommands = ["add", "commit", "checkout", "switch", "merge", "rebase", "pull", "push"]
-reason = "Standard git workflow operations."
+reason = "Standard git workflow operations (force-push caught by RED rule above)."
 
 [[rules.green]]
 commands = ["ls", "cat", "head", "tail", "wc", "sort", "uniq", "grep", "rg",
             "file", "stat", "du", "df", "which", "whereis", "type",
-            "echo", "printf", "true", "false", "test", "["]
-reason = "Read-only filesystem and text inspection utilities."
+            "true", "false", "test", "[", "find", "echo", "printf"]
+reason = "Read-only filesystem, text inspection, and output utilities."
 
+[[rules.green]]
+command = "sed"
+exclude_flags = ["-i", "--in-place"]
+reason = "Stream editor without in-place modification (sed -i caught by YELLOW rule with LLM review)."
+
+[[rules.green]]
+commands = ["bash", "sh", "zsh", "dash"]
+flags = ["-n", "--noexec"]
+reason = "Shell syntax check only — parses but never executes."
 
 [[rules.green]]
 commands = ["cd", "pwd", "pushd", "popd", "dirs"]
 reason = "Directory navigation."
 
-[[rules.green]]
-commands = ["go", "gofmt", "goimports"]
-reason = "Go toolchain."
+# --- Development toolchains (safe subcommands only) ---
 
 [[rules.green]]
-commands = ["bun", "bunx", "npm", "npx", "tsc", "tsx"]
-reason = "JavaScript/TypeScript toolchain."
+command = "go"
+subcommands = ["build", "test", "vet", "fmt", "mod", "generate", "doc", "env", "version", "tool", "clean"]
+reason = "Safe Go toolchain subcommands."
 
 [[rules.green]]
-commands = ["cargo", "rustc", "rustfmt", "clippy"]
-reason = "Rust toolchain."
+commands = ["gofmt", "goimports"]
+reason = "Go formatting tools."
 
 [[rules.green]]
-commands = ["jq", "yq", "awk", "cut", "tr"]
+command = "npm"
+subcommands = ["test", "run", "start", "build", "list", "ls", "outdated", "info", "view", "pack", "audit", "ci"]
+reason = "Safe npm subcommands."
+
+[[rules.green]]
+command = "bun"
+subcommands = ["test", "run", "build", "init"]
+reason = "Safe bun subcommands."
+
+[[rules.green]]
+commands = ["tsc", "tsx"]
+reason = "TypeScript compiler and runner."
+
+[[rules.green]]
+command = "cargo"
+subcommands = ["build", "test", "check", "clippy", "fmt", "doc", "bench", "clean", "tree", "metadata"]
+reason = "Safe cargo subcommands."
+
+[[rules.green]]
+commands = ["rustc", "rustfmt"]
+reason = "Rust compiler and formatter."
+
+# --- Text processing (read-only) ---
+
+[[rules.green]]
+commands = ["jq", "yq", "cut", "tr"]
 reason = "Text processing utilities (read-only, no file write capability)."
+
+# --- System info (read-only) ---
 
 [[rules.green]]
 command = "docker"
@@ -194,6 +346,8 @@ reason = "System info queries (read-only)."
 commands = ["mkdir", "touch"]
 reason = "Directory and file creation."
 
+# --- Scope-bound rules ---
+
 [[rules.green]]
 command = "gh"
 resolve = { resolver = "github_repo_owner", scope = "github_owners" }
@@ -204,7 +358,9 @@ command = "curl"
 resolve = { resolver = "url_domain", scope = "allowed_domains" }
 reason = "HTTP requests to trusted domains."
 
-# === YELLOW Rules (require review) ====================================
+# === YELLOW Rules (require review) ========================================
+
+# --- Network access ---
 
 [[rules.yellow]]
 commands = ["curl", "wget", "http", "httpie"]
@@ -217,10 +373,22 @@ llm_review = true
 reason = "GitHub CLI targeting unknown repo — LLM reviews with scope context."
 
 [[rules.yellow]]
-command = "docker"
-subcommands = ["run", "exec", "build", "compose", "pull", "push", "rm", "rmi", "stop", "kill"]
+commands = ["ssh", "scp", "rsync"]
 llm_review = true
-reason = "Docker mutation operations require review."
+reason = "Remote access commands require review."
+
+# --- Package management (remote code execution) ---
+
+[[rules.yellow]]
+commands = ["npm"]
+subcommands = ["install", "i", "add", "uninstall", "remove"]
+llm_review = true
+reason = "npm package installation — LLM reviews package names."
+
+[[rules.yellow]]
+commands = ["npx", "bunx"]
+llm_review = true
+reason = "Package execution tools download and run arbitrary code from npm."
 
 [[rules.yellow]]
 commands = ["pip", "pip3", "gem", "composer"]
@@ -229,35 +397,32 @@ llm_review = true
 reason = "Package installation — LLM reviews package names."
 
 [[rules.yellow]]
-commands = ["ssh", "scp", "rsync"]
+command = "cargo"
+subcommands = ["install", "add", "remove"]
 llm_review = true
-reason = "Remote access commands require review."
+reason = "Cargo package installation downloads and compiles from crates.io."
 
 [[rules.yellow]]
-commands = ["kill", "killall", "pkill"]
-llm_review = false
-reason = "Process termination — ask user, no LLM needed."
-
-[[rules.yellow]]
-command = "chmod"
-llm_review = false
-reason = "Permission changes (non-dangerous ones that passed RED)."
-
-[[rules.yellow]]
-commands = ["crontab", "at", "systemctl", "launchctl"]
+command = "go"
+subcommands = ["install", "get"]
 llm_review = true
-reason = "Scheduled tasks and service management."
+reason = "Go commands that fetch/execute remote code."
+
+# --- Container mutation ---
+
+[[rules.yellow]]
+command = "docker"
+subcommands = ["run", "exec", "build", "compose", "pull", "push", "rm", "rmi", "stop", "kill"]
+llm_review = true
+reason = "Docker mutation operations require review."
+
+# --- File modification ---
 
 [[rules.yellow]]
 command = "sed"
 flags = ["-i", "--in-place"]
 llm_review = true
 reason = "In-place file modification — LLM reviews the expression and target."
-
-[[rules.yellow]]
-command = "sed"
-llm_review = false
-reason = "Text stream editor — ask user (sed -i caught above with LLM review)."
 
 [[rules.yellow]]
 command = "tee"
@@ -270,21 +435,16 @@ llm_review = true
 reason = "File copy/move — LLM reviews source and destination paths."
 
 [[rules.yellow]]
-command = "find"
-flags = ["-exec", "-execdir"]
+command = "awk"
 llm_review = true
-reason = "find with -exec executes arbitrary commands — LLM reviews the invocation."
+reason = "awk can write to files via internal redirections — LLM reviews the program."
 
-[[rules.yellow]]
-command = "find"
-llm_review = false
-reason = "Filesystem search without command execution — ask user."
+# --- Command execution ---
 
 [[rules.yellow]]
 commands = ["python", "python3", "ruby", "perl"]
-flags = ["-c", "-e"]
 llm_review = true
-reason = "Inline script execution — LLM reviews the code string."
+reason = "Interpreter execution — LLM reviews the arguments and may request script files."
 
 [[rules.yellow]]
 commands = ["make", "cmake", "just"]
@@ -302,24 +462,43 @@ llm_review = true
 reason = "node directly executes scripts — LLM reviews arguments and context."
 
 [[rules.yellow]]
-commands = ["source", "."]
-llm_review = true
-reason = "Script sourcing executes file contents in the current shell — LLM reviews the target file."
-
-[[rules.yellow]]
-command = "trap"
-llm_review = true
-reason = "Trap handlers execute strings as commands — LLM reviews the handler body."
-
-[[rules.yellow]]
 commands = ["bash", "sh", "zsh", "dash"]
 llm_review = true
 reason = "Shell invocation may execute scripts — LLM reviews arguments and context."
 
 [[rules.yellow]]
+commands = ["source", "."]
+llm_review = true
+reason = "Script sourcing executes file contents in the current shell."
+
+[[rules.yellow]]
 command = "exec"
 llm_review = true
 reason = "exec replaces the current process — LLM reviews the target command."
+
+# --- Process and system management ---
+
+[[rules.yellow]]
+commands = ["kill", "killall", "pkill"]
+llm_review = false
+reason = "Process termination — ask user, no LLM needed."
+
+[[rules.yellow]]
+command = "chmod"
+llm_review = false
+reason = "Permission changes (non-dangerous ones that passed RED)."
+
+[[rules.yellow]]
+commands = ["crontab", "at", "systemctl", "launchctl"]
+llm_review = true
+reason = "Scheduled tasks and service management."
+
+[[rules.yellow]]
+command = "trap"
+llm_review = true
+reason = "Trap handlers execute strings as commands."
+
+# --- Environment and shell manipulation ---
 
 [[rules.yellow]]
 command = "env"
@@ -330,6 +509,50 @@ reason = "Bare env prints environment variables and may expose secrets (tokens, 
 command = "printenv"
 llm_review = true
 reason = "printenv reveals environment variable values and can expose secrets; the no-argument form is especially risky as it dumps the full environment."
+
+[[rules.yellow]]
+commands = ["export", "unset"]
+llm_review = true
+reason = "Environment variable modification — could alter PATH or inject LD_PRELOAD."
+
+[[rules.yellow]]
+commands = ["alias", "unalias"]
+llm_review = true
+reason = "Alias manipulation could mask dangerous commands."
+
+# --- Filesystem operations ---
+
+[[rules.yellow]]
+command = "ln"
+llm_review = true
+reason = "Symlink creation — could be used for path traversal attacks."
+
+[[rules.yellow]]
+commands = ["tar", "unzip", "7z", "gzip", "gunzip", "bzip2", "xz"]
+llm_review = true
+reason = "Archive operations — LLM reviews for path traversal and overwrite targets."
+
+# --- Git state modification ---
+
+[[rules.yellow]]
+command = "git"
+subcommands = ["remote"]
+llm_review = true
+reason = "Git remote manipulation — could point to attacker-controlled repo."
+
+[[rules.yellow]]
+command = "git"
+subcommands = ["push"]
+flags = ["--force-with-lease"]
+llm_review = true
+reason = "Force-with-lease push — safer than --force but still rewrites remote history."
+
+# --- Browser/URL opening ---
+
+[[rules.yellow]]
+commands = ["open", "xdg-open"]
+llm_review = true
+reason = "Opens URLs or files with default handlers — could launch phishing pages."
 
 # ---------------------------------------------------------------------------
 # LLM Reviewer Configuration
