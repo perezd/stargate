@@ -4,5 +4,8 @@
 
 # Git worktrees
 .worktrees/
-/graphify-out/
+# graphify: commit graph outputs, skip local-only files
+graphify-out/cache/
+graphify-out/manifest.json
+graphify-out/cost.json
 .DS_Store
