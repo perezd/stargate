@@ -372,6 +372,43 @@ func TestScrubCommandInfo(t *testing.T) {
 			t.Errorf("expected nil Args for empty input, got %v", out.Args)
 		}
 	})
+
+	t.Run("rawArgs scrubbed", func(t *testing.T) {
+		cmd := types.CommandInfo{
+			Name:    "gh",
+			RawArgs: []string{"--repo", "owner/repo", "--token", "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij"},
+		}
+		out := s.CommandInfo(cmd)
+		if len(out.RawArgs) != len(cmd.RawArgs) {
+			t.Fatalf("RawArgs length mismatch: got %d, want %d", len(out.RawArgs), len(cmd.RawArgs))
+		}
+		if strings.Contains(out.RawArgs[3], "ghp_") {
+			t.Errorf("RawArgs[3] still contains secret: %q", out.RawArgs[3])
+		}
+		if out.RawArgs[0] != "--repo" {
+			t.Errorf("RawArgs[0] = %q, want --repo", out.RawArgs[0])
+		}
+	})
+
+	t.Run("original rawArgs unmodified (deep copy)", func(t *testing.T) {
+		cmd := types.CommandInfo{
+			Name:    "gh",
+			RawArgs: []string{"--token", "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij"},
+		}
+		out := s.CommandInfo(cmd)
+		_ = out
+		if !strings.Contains(cmd.RawArgs[1], "ghp_") {
+			t.Error("original.RawArgs was mutated")
+		}
+	})
+
+	t.Run("nil rawArgs handled", func(t *testing.T) {
+		cmd := types.CommandInfo{Name: "ls"}
+		out := s.CommandInfo(cmd)
+		if out.RawArgs != nil {
+			t.Errorf("expected nil RawArgs for empty input, got %v", out.RawArgs)
+		}
+	})
 }
 
 func TestScrubText(t *testing.T) {

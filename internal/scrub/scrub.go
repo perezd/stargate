@@ -135,6 +135,15 @@ func (s *Scrubber) CommandInfo(cmd types.CommandInfo) types.CommandInfo {
 		}
 	}
 
+	// Deep copy and redact RawArgs — contains the same data as Flags+Args
+	// before classification, so carries the same secret-exposure risk.
+	if cmd.RawArgs != nil {
+		out.RawArgs = make([]string, len(cmd.RawArgs))
+		for i, arg := range cmd.RawArgs {
+			out.RawArgs[i] = s.Text(arg)
+		}
+	}
+
 	// Deep copy and scrub Redirects — targets can contain secrets in filenames.
 	if cmd.Redirects != nil {
 		out.Redirects = make([]types.RedirectInfo, len(cmd.Redirects))
