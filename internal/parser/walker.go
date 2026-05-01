@@ -658,6 +658,7 @@ func (ws *walkerState) extractCallExpr(ce *syntax.CallExpr) {
 
 	var flags, positional []string
 	var subcommand string
+	var rawArgs []string
 	if name == "" {
 		// Unresolvable command — treat all remaining args as raw positional
 		// without flag parsing or subcommand extraction.
@@ -669,6 +670,14 @@ func (ws *walkerState) extractCallExpr(ce *syntax.CallExpr) {
 			}
 		}
 	} else {
+		rawArgs = make([]string, len(remainingArgs))
+		for i, w := range remainingArgs {
+			if lit, ok := wordLiteral(w); ok {
+				rawArgs[i] = lit
+			} else {
+				rawArgs[i] = wordToString(w)
+			}
+		}
 		flags, positional, subcommand = classifyArgs(name, remainingArgs, ws.cfg.CommandFlags)
 		if lookupMode {
 			// Lookup wrappers (e.g., "command -v foo") aren't executing —
@@ -683,6 +692,7 @@ func (ws *walkerState) extractCallExpr(ce *syntax.CallExpr) {
 		Name:       name,
 		Args:       positional,
 		Flags:      flags,
+		RawArgs:    rawArgs,
 		Subcommand: subcommand,
 		Env:        env,
 		Context:    ctx,
