@@ -14,6 +14,7 @@ type CommandInfo struct {
 	Name       string            // Resolved command name (after prefix stripping)
 	Args       []string          // Positional arguments
 	Flags      []string          // Flags (short and long, as parsed)
+	RawArgs    []string          // All args before flag/positional classification (evasion-normalized)
 	Subcommand string            // First positional argument (after global flag skipping), when present
 	Redirects  []RedirectInfo    // File redirections
 	Env        map[string]string // Inline env vars (e.g., FOO=bar cmd)

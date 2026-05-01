@@ -216,43 +216,43 @@ func TestWalkInlineEnv(t *testing.T) {
 
 func TestWalkPrefixStripping(t *testing.T) {
 	tests := []struct {
-		name        string
-		input       string
-		wantName    string
-		wantFlags   []string
-		wantArgs    []string
+		name      string
+		input     string
+		wantName  string
+		wantFlags []string
+		wantArgs  []string
 	}{
 		{
-			name:     "command builtin",
-			input:    "command rm -rf /",
-			wantName: "rm",
+			name:      "command builtin",
+			input:     "command rm -rf /",
+			wantName:  "rm",
 			wantFlags: []string{"-rf"},
 			wantArgs:  []string{"/"},
 		},
 		{
-			name:     "command with --",
-			input:    "command -- rm -rf /",
-			wantName: "rm",
+			name:      "command with --",
+			input:     "command -- rm -rf /",
+			wantName:  "rm",
 			wantFlags: []string{"-rf"},
 			wantArgs:  []string{"/"},
 		},
 		{
-			name:     "time -p prefix",
-			input:    "time -p rm -rf /",
-			wantName: "rm",
+			name:      "time -p prefix",
+			input:     "time -p rm -rf /",
+			wantName:  "rm",
 			wantFlags: []string{"-rf"},
 			wantArgs:  []string{"/"},
 		},
 		{
-			name:     "env prefix",
-			input:    "env ls -la",
-			wantName: "ls",
+			name:      "env prefix",
+			input:     "env ls -la",
+			wantName:  "ls",
 			wantFlags: []string{"-la"},
 		},
 		{
-			name:     "sudo prefix",
-			input:    "sudo rm -rf /",
-			wantName: "rm",
+			name:      "sudo prefix",
+			input:     "sudo rm -rf /",
+			wantName:  "rm",
 			wantFlags: []string{"-rf"},
 			wantArgs:  []string{"/"},
 		},
@@ -273,9 +273,9 @@ func TestWalkPrefixStripping(t *testing.T) {
 			wantArgs: []string{"http://example.com"},
 		},
 		{
-			name:     "nested sudo env nice",
-			input:    "sudo env nice rm -f /tmp/x",
-			wantName: "rm",
+			name:      "nested sudo env nice",
+			input:     "sudo env nice rm -f /tmp/x",
+			wantName:  "rm",
 			wantFlags: []string{"-f"},
 			wantArgs:  []string{"/tmp/x"},
 		},
@@ -291,9 +291,9 @@ func TestWalkPrefixStripping(t *testing.T) {
 			wantName: "ls",
 		},
 		{
-			name:     "watch prefix",
-			input:    "watch df -h",
-			wantName: "df",
+			name:      "watch prefix",
+			input:     "watch df -h",
+			wantName:  "df",
 			wantFlags: []string{"-h"},
 		},
 		{
@@ -932,9 +932,9 @@ func TestWalkSubcommandGlobalFlagSkipping(t *testing.T) {
 		{"gh -R owner/repo issue create", "issue"},
 		{"kubectl --namespace kube-system get pods", "get"},
 		{"kubectl -n default describe pod foo", "describe"},
-		{"git -- status", ""},           // -- terminates: status is arg, not subcmd
-		{"git -C /tmp -- status", ""},   // -- after global flag
-		{"ls -la /tmp", "/tmp"},         // no global flag map; first positional (/tmp) becomes subcommand (rule engine ignores it for commands without subcommand rules)
+		{"git -- status", ""},         // -- terminates: status is arg, not subcmd
+		{"git -C /tmp -- status", ""}, // -- after global flag
+		{"ls -la /tmp", "/tmp"},       // no global flag map; first positional (/tmp) becomes subcommand (rule engine ignores it for commands without subcommand rules)
 	}
 	for _, tc := range tests {
 		t.Run(tc.cmd, func(t *testing.T) {
@@ -1291,5 +1291,53 @@ func TestWalkDynamicFirstPositionalBlocksSubcommand(t *testing.T) {
 	}
 	if infos[0].Subcommand != "" {
 		t.Errorf("expected empty Subcommand (first positional was dynamic), got %q", infos[0].Subcommand)
+	}
+}
+
+func TestWalkRawArgsPopulated(t *testing.T) {
+	tests := []struct {
+		cmd         string
+		wantRawArgs []string
+	}{
+		{
+			"gh --repo owner/repo pr list",
+			[]string{"--repo", "owner/repo", "pr", "list"},
+		},
+		{
+			"gh -R owner/repo issue create",
+			[]string{"-R", "owner/repo", "issue", "create"},
+		},
+		{
+			"gh --repo=owner/repo pr list",
+			[]string{"--repo=owner/repo", "pr", "list"},
+		},
+		{
+			"gh pr list",
+			[]string{"pr", "list"},
+		},
+		{
+			"git -C /tmp status",
+			[]string{"-C", "/tmp", "status"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.cmd, func(t *testing.T) {
+			infos, err := ParseAndWalk(tc.cmd, "bash", nil)
+			if err != nil {
+				t.Fatalf("error: %v", err)
+			}
+			if len(infos) == 0 {
+				t.Fatal("expected at least 1 command")
+			}
+			got := infos[0].RawArgs
+			if len(got) != len(tc.wantRawArgs) {
+				t.Fatalf("RawArgs = %v, want %v", got, tc.wantRawArgs)
+			}
+			for i := range got {
+				if got[i] != tc.wantRawArgs[i] {
+					t.Errorf("RawArgs[%d] = %q, want %q", i, got[i], tc.wantRawArgs[i])
+				}
+			}
+		})
 	}
 }
